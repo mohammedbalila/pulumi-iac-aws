@@ -1,0 +1,29 @@
+config:
+  aws:region: us-west-2
+  aws:profile: default # Change to your AWS profile
+
+  # Application configuration
+  pulumi-aws-infrastructure:appName: my-app
+  pulumi-aws-infrastructure:repositoryUrl: https://github.com/username/repo # CHANGE THIS
+  pulumi-aws-infrastructure:branch: main
+
+  # Database configuration
+  pulumi-aws-infrastructure:dbUsername: postgres
+  pulumi-aws-infrastructure:dbPassword:
+    secure: # Set this with: pulumi config set --secret dbPassword <your-production-password>
+
+  # Monitoring configuration (REQUIRED for production)
+  pulumi-aws-infrastructure:alertEmail: # REQUIRED: your-email@example.com
+
+  # API configuration
+  pulumi-aws-infrastructure:apiBaseUrl: # Production API base URL
+
+  # Feature flags
+  pulumi-aws-infrastructure:enableNewFeature: false # Set to true when ready
+
+  # External services (optional)
+  pulumi-aws-infrastructure:redisUrl: # Redis connection string if using
+  pulumi-aws-infrastructure:sentryDsn: # Sentry DSN for error tracking
+
+  # Cost center for billing
+  pulumi-aws-infrastructure:costCenter: production

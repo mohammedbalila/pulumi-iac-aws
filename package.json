@@ -1,0 +1,61 @@
+{
+    "name": "pulumi-aws-infrastructure",
+    "version": "1.0.0",
+    "description": "Cost-optimized AWS infrastructure using Pulumi",
+    "main": "index.js",
+    "scripts": {
+        "build": "tsc",
+        "test": "mocha -r ts-node/register tests/**/*.spec.ts",
+        "lint": "eslint . --ext .ts",
+        "lint:fix": "eslint . --ext .ts --fix",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "dev:preview": "cd environments/dev && pulumi preview",
+        "dev:up": "cd environments/dev && pulumi up",
+        "staging:preview": "cd environments/staging && pulumi preview",
+        "staging:up": "cd environments/staging && pulumi up",
+        "prod:preview": "cd environments/prod && pulumi preview",
+        "prod:up": "cd environments/prod && pulumi up",
+        "prepare": "husky install"
+    },
+    "dependencies": {
+        "@pulumi/aws": "^6.0.0",
+        "@pulumi/pulumi": "^3.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.0.0",
+        "mocha": "^10.4.0",
+        "chai": "^4.3.10",
+        "ts-node": "^10.9.2",
+        "@types/mocha": "^10.0.6",
+        "@types/chai": "^4.3.11",
+        "eslint": "^8.57.0",
+        "@typescript-eslint/parser": "^6.21.0",
+        "@typescript-eslint/eslint-plugin": "^6.21.0",
+        "prettier": "^3.3.3",
+        "eslint-config-prettier": "^9.1.0",
+        "eslint-plugin-prettier": "^5.2.1",
+        "lint-staged": "^15.2.9",
+        "husky": "^9.1.6"
+    },
+    "lint-staged": {
+        "*.{ts}": [
+            "eslint --fix"
+        ],
+        "*.{ts,js,json,md,yml,yaml}": [
+            "prettier --write"
+        ]
+    },
+    "keywords": [
+        "pulumi",
+        "aws",
+        "infrastructure",
+        "iac"
+    ],
+    "engines": {
+        "node": ">=22.0.0"
+    },
+    "author": "Your Name",
+    "license": "MIT"
+}

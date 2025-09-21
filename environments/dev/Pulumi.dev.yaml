@@ -1,0 +1,25 @@
+config:
+  aws:region: us-west-2
+  aws:profile: default # Change to your AWS profile
+
+  # Application configuration
+  pulumi-aws-infrastructure:appName: my-app
+  pulumi-aws-infrastructure:repositoryUrl: https://github.com/username/repo # CHANGE THIS
+  pulumi-aws-infrastructure:branch: develop
+
+  # Database configuration
+  pulumi-aws-infrastructure:dbUsername: postgres
+  pulumi-aws-infrastructure:dbPassword:
+    secure: # Set this with: pulumi config set --secret dbPassword <your-password>
+
+  # Monitoring configuration
+  pulumi-aws-infrastructure:alertEmail: # your-email@example.com
+
+  # API configuration
+  pulumi-aws-infrastructure:apiBaseUrl: # Optional API base URL
+
+  # Cost center for billing
+  pulumi-aws-infrastructure:costCenter: development
+
+  # Networking configuration
+  pulumi-aws-infrastructure:useFckNat: true # Use fck-nat for 90% NAT cost savings

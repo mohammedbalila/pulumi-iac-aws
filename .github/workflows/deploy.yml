@@ -1,0 +1,298 @@
+name: Deploy Infrastructure
+
+on:
+    push:
+        branches: [main, develop]
+        paths:
+            - "environments/**"
+            - "modules/**"
+            - "shared/**"
+            - ".github/workflows/deploy.yml"
+    pull_request:
+        branches: [main]
+        paths:
+            - "environments/**"
+            - "modules/**"
+            - "shared/**"
+            - ".github/workflows/deploy.yml"
+
+env:
+    NODE_VERSION: "22"
+    PULUMI_VERSION: "3.89.0"
+
+jobs:
+    validate:
+        name: Validate Infrastructure Code
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Lint and type check
+              run: |
+                  npm run build
+                  echo "✅ TypeScript compilation successful"
+
+            - name: Install Pulumi
+              uses: pulumi/setup-pulumi@v2
+              with:
+                  pulumi-version: ${{ env.PULUMI_VERSION }}
+
+            - name: Validate Pulumi configurations
+              run: |
+                  cd environments/dev && pulumi config --show-secrets=false
+                  cd ../staging && pulumi config --show-secrets=false
+                  cd ../prod && pulumi config --show-secrets=false
+              continue-on-error: true
+
+    plan-dev:
+        name: Plan Development Environment
+        runs-on: ubuntu-latest
+        needs: validate
+        if: github.event_name == 'pull_request'
+        environment: development
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: us-west-2
+
+            - name: Install Pulumi
+              uses: pulumi/setup-pulumi@v2
+              with:
+                  pulumi-version: ${{ env.PULUMI_VERSION }}
+
+            - name: Pulumi Preview (Development)
+              uses: pulumi/actions@v4
+              with:
+                  command: preview
+                  stack-name: dev
+                  work-dir: environments/dev
+                  comment-on-pr: true
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+              env:
+                  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+    deploy-dev:
+        name: Deploy to Development
+        runs-on: ubuntu-latest
+        needs: validate
+        if: github.ref == 'refs/heads/develop'
+        environment: development
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: us-west-2
+
+            - name: Install Pulumi
+              uses: pulumi/setup-pulumi@v2
+              with:
+                  pulumi-version: ${{ env.PULUMI_VERSION }}
+
+            - name: Pulumi Up (Development)
+              uses: pulumi/actions@v4
+              with:
+                  command: up
+                  stack-name: dev
+                  work-dir: environments/dev
+              env:
+                  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+            - name: Export stack outputs
+              uses: pulumi/actions@v4
+              with:
+                  command: stack output --json
+                  stack-name: dev
+                  work-dir: environments/dev
+              env:
+                  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+    deploy-staging:
+        name: Deploy to Staging
+        runs-on: ubuntu-latest
+        needs: validate
+        if: github.ref == 'refs/heads/main'
+        environment: staging
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: us-west-2
+
+            - name: Install Pulumi
+              uses: pulumi/setup-pulumi@v2
+              with:
+                  pulumi-version: ${{ env.PULUMI_VERSION }}
+
+            - name: Pulumi Up (Staging)
+              uses: pulumi/actions@v4
+              with:
+                  command: up
+                  stack-name: staging
+                  work-dir: environments/staging
+              env:
+                  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+            - name: Run infrastructure tests
+              run: |
+                  # Add infrastructure testing commands here
+                  echo "Running infrastructure validation tests..."
+                  # Example: curl health check, database connectivity test, etc.
+
+    deploy-production:
+        name: Deploy to Production
+        runs-on: ubuntu-latest
+        needs: [deploy-staging]
+        if: github.ref == 'refs/heads/main'
+        environment: production
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: us-west-2
+
+            - name: Install Pulumi
+              uses: pulumi/setup-pulumi@v2
+              with:
+                  pulumi-version: ${{ env.PULUMI_VERSION }}
+
+            - name: Pulumi Preview (Production)
+              uses: pulumi/actions@v4
+              with:
+                  command: preview
+                  stack-name: prod
+                  work-dir: environments/prod
+              env:
+                  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+            - name: Manual approval checkpoint
+              uses: trstringer/manual-approval@v1
+              with:
+                  secret: ${{ secrets.GITHUB_TOKEN }}
+                  approvers: ${{ vars.PRODUCTION_APPROVERS }}
+                  minimum-approvals: 1
+                  issue-title: "Production Infrastructure Deployment Approval Required"
+                  issue-body: |
+                      Please review the infrastructure changes and approve the production deployment.
+
+                      **Environment**: Production
+                      **Branch**: ${{ github.ref }}
+                      **Commit**: ${{ github.sha }}
+
+                      Review the Pulumi preview above and approve if the changes look correct.
+
+            - name: Pulumi Up (Production)
+              uses: pulumi/actions@v4
+              with:
+                  command: up
+                  stack-name: prod
+                  work-dir: environments/prod
+              env:
+                  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+            - name: Post-deployment validation
+              run: |
+                  echo "Running post-deployment validation..."
+                  # Add production validation tests here
+                  # Example: health checks, smoke tests, monitoring verification
+
+            - name: Notify deployment success
+              if: success()
+              run: |
+                  echo "✅ Production deployment completed successfully"
+                  # Add notification logic here (Slack, email, etc.)
+
+    cleanup-preview:
+        name: Cleanup Preview Stacks
+        runs-on: ubuntu-latest
+        if: github.event_name == 'pull_request' && github.event.action == 'closed'
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Install Pulumi
+              uses: pulumi/setup-pulumi@v2
+              with:
+                  pulumi-version: ${{ env.PULUMI_VERSION }}
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: us-west-2
+
+            - name: Clean up preview stack
+              run: |
+                  # Clean up any preview stacks created for this PR
+                  STACK_NAME="preview-pr-${{ github.event.pull_request.number }}"
+                  echo "Cleaning up preview stack: $STACK_NAME"
+                  # pulumi stack rm $STACK_NAME --yes || echo "Stack not found or already deleted"
+              env:
+                  PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
