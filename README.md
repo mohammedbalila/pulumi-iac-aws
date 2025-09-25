@@ -30,15 +30,10 @@ flowchart LR
   CF -- yes --> W[WAFv2]
   CF -- no  --> W
   W --> AR[App Runner]
-  AR -. VPC Connector .-> VPC[(VPC)]
-  VPC --> RDS[(RDS)]
-  VPC --> L[Lambda]
 ```
 
 ## Project Structure
-
-```
-pulumi-infrastructure/
+pulumi-iac-aws/
 ├── environments/          # Environment-specific configurations
 │   ├── dev/              # Development environment
 │   ├── staging/          # Staging environment
@@ -83,7 +78,7 @@ pulumi-infrastructure/
 ```bash
 # Clone the repository
 git clone <your-repo-url>
-cd pulumi-infrastructure
+cd pulumi-iac-aws
 
 # Install dependencies
 npm install
