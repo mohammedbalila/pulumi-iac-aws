@@ -16,7 +16,7 @@
         "staging:up": "cd environments/staging && pulumi up",
         "prod:preview": "cd environments/prod && pulumi preview",
         "prod:up": "cd environments/prod && pulumi up",
-        "prepare": "husky install"
+        "prepare": "husky"
     },
     "dependencies": {
         "@pulumi/aws": "^6.0.0",
@@ -41,7 +41,7 @@
         "typescript": "^5.0.0"
     },
     "lint-staged": {
-        "*.{ts}": [
+        "*.ts": [
             "eslint --fix"
         ],
         "*.{ts,js,json,md,yml,yaml}": [

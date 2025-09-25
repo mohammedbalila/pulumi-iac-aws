@@ -23,9 +23,8 @@ describe("GitHubActionsRole", () => {
                 });
             });
             const policy = JSON.parse(assumeRolePolicy);
-            const subjects = policy.Statement[0].Condition.StringLike[
-                "token.actions.githubusercontent.com:sub"
-            ];
+            const subjects =
+                policy.Statement[0].Condition.StringLike["token.actions.githubusercontent.com:sub"];
 
             expect(subjects).to.include.members([
                 "repo:example/repo:ref:refs/heads/develop",

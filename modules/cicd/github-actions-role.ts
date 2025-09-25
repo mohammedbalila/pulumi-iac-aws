@@ -20,7 +20,8 @@ export class GitHubActionsRole extends pulumi.ComponentResource {
     constructor(name: string, args: GitHubActionsRoleArgs, opts?: pulumi.ComponentResourceOptions) {
         super("custom:security:GitHubActionsRole", name, {}, opts);
 
-        const hasBranchSubjects = Array.isArray(args.githubBranches) && args.githubBranches.length > 0;
+        const hasBranchSubjects =
+            Array.isArray(args.githubBranches) && args.githubBranches.length > 0;
         const hasEnvironmentSubjects =
             Array.isArray(args.githubEnvironments) && args.githubEnvironments.length > 0;
 
@@ -94,7 +95,9 @@ export class GitHubActionsRole extends pulumi.ComponentResource {
                     `repo:${args.githubOrg}/${args.githubRepo}:environment:${environment}`,
             );
 
-            const subjectConditions = Array.from(new Set([...branchSubjects, ...environmentSubjects]));
+            const subjectConditions = Array.from(
+                new Set([...branchSubjects, ...environmentSubjects]),
+            );
 
             return JSON.stringify({
                 Version: "2012-10-17",

@@ -295,21 +295,19 @@ export class AppRunnerService extends pulumi.ComponentResource {
             const ssmPolicy = new aws.iam.Policy(
                 `${this.getName()}-apprunner-ssm-read`,
                 {
-                    policy: pulumi
-                        .all([pulumi.all(paramArns), kmsArn])
-                        .apply(([arns, k]) =>
-                            JSON.stringify({
-                                Version: "2012-10-17",
-                                Statement: [
-                                    {
-                                        Effect: "Allow",
-                                        Action: ["ssm:GetParameter", "ssm:GetParameters"],
-                                        Resource: arns,
-                                    },
-                                    { Effect: "Allow", Action: ["kms:Decrypt"], Resource: k },
-                                ],
-                            }),
-                        ),
+                    policy: pulumi.all([pulumi.all(paramArns), kmsArn]).apply(([arns, k]) =>
+                        JSON.stringify({
+                            Version: "2012-10-17",
+                            Statement: [
+                                {
+                                    Effect: "Allow",
+                                    Action: ["ssm:GetParameter", "ssm:GetParameters"],
+                                    Resource: arns,
+                                },
+                                { Effect: "Allow", Action: ["kms:Decrypt"], Resource: k },
+                            ],
+                        }),
+                    ),
                 },
                 { parent: this },
             );

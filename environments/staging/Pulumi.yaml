@@ -1,7 +1,7 @@
 name: pulumi-aws-infrastructure
 runtime:
-  name: nodejs
-  options:
-    typescript: true
+    name: nodejs
+    options:
+        typescript: true
 main: index.ts
 description: Staging environment stack for the AWS infrastructure template

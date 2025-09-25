@@ -174,28 +174,29 @@ export class FckNat extends pulumi.ComponentResource {
             "#!/bin/bash",
             "# fck-nat configuration will be handled by the AMI",
             "# The instance will automatically configure itself as a NAT",
-            "echo \"fck-nat instance starting up\"",
+            'echo "fck-nat instance starting up"',
         ].join("\n")}`;
 
-        this.instances = args.publicSubnetIds.map((publicSubnetId, index) =>
-            new aws.ec2.Instance(
-                `${args.name}-fck-nat-${index}`,
-                {
-                    ami: fckNatAmi.id,
-                    instanceType: instanceType,
-                    subnetId: publicSubnetId,
-                    vpcSecurityGroupIds: [this.securityGroup.id],
-                    iamInstanceProfile: instanceProfile.name,
-                    sourceDestCheck: false, // Critical for NAT functionality
-                    userData: userDataScript,
-                    tags: {
-                        ...tags,
-                        Name: `${args.name}-fck-nat-${index}`,
-                        "fck-nat:zone": `${index}`,
+        this.instances = args.publicSubnetIds.map(
+            (publicSubnetId, index) =>
+                new aws.ec2.Instance(
+                    `${args.name}-fck-nat-${index}`,
+                    {
+                        ami: fckNatAmi.id,
+                        instanceType: instanceType,
+                        subnetId: publicSubnetId,
+                        vpcSecurityGroupIds: [this.securityGroup.id],
+                        iamInstanceProfile: instanceProfile.name,
+                        sourceDestCheck: false, // Critical for NAT functionality
+                        userData: userDataScript,
+                        tags: {
+                            ...tags,
+                            Name: `${args.name}-fck-nat-${index}`,
+                            "fck-nat:zone": `${index}`,
+                        },
                     },
-                },
-                { parent: this },
-            ),
+                    { parent: this },
+                ),
         );
 
         this.routeTables = args.privateSubnetIds.map((privateSubnetId, index) => {

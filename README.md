@@ -33,21 +33,23 @@ flowchart LR
 ```
 
 ## Project Structure
+
 pulumi-iac-aws/
-├── environments/          # Environment-specific configurations
-│   ├── dev/              # Development environment
-│   ├── staging/          # Staging environment
-│   └── prod/             # Production environment
-├── modules/              # Reusable infrastructure modules
-│   ├── networking/       # VPC, subnets, routing
-│   ├── database/         # RDS PostgreSQL
-│   ├── compute/          # App Runner services
-│   ├── lambda/           # Lambda functions
-│   └── monitoring/       # CloudWatch, alarms, budgets
-├── shared/               # Shared configuration and types
-├── .github/workflows/    # CI/CD pipeline
-└── docs/                 # Additional documentation
-```
+├── environments/ # Environment-specific configurations
+│ ├── dev/ # Development environment
+│ ├── staging/ # Staging environment
+│ └── prod/ # Production environment
+├── modules/ # Reusable infrastructure modules
+│ ├── networking/ # VPC, subnets, routing
+│ ├── database/ # RDS PostgreSQL
+│ ├── compute/ # App Runner services
+│ ├── lambda/ # Lambda functions
+│ └── monitoring/ # CloudWatch, alarms, budgets
+├── shared/ # Shared configuration and types
+├── .github/workflows/ # CI/CD pipeline
+└── docs/ # Additional documentation
+
+````
 
 ## Setup Resources
 
@@ -85,7 +87,7 @@ npm install
 
 # Build TypeScript
 npm run build
-```
+````
 
 ### 2. Configure Pulumi
 
@@ -288,6 +290,7 @@ const appService = new AppRunnerService(`${appName}-${environment}-app`, {
 ```
 
 ### Modifying Database Configuration
+
 Edit the RDS configuration in each environment:
 
 ```typescript
@@ -374,6 +377,7 @@ pulumi stack output exampleLambdaArn
 - Lambda: Increase memory allocation
 
 ### Horizontal Scaling
+
 - App Runner: Adjust min/max size and concurrency settings
 - Database: Scale storage automatically; consider read replicas for read-heavy workloads
 - Lambda: Increase reserved concurrency if needed
@@ -405,6 +409,7 @@ pulumi config set enableWaf true   # or false
 ```
 
 - CloudFront (optional): place a distribution in front of App Runner for edge protections/caching:
+
 ```bash
 pulumi config set enableCloudFront true
 ```

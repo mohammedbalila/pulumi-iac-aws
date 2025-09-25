@@ -59,7 +59,8 @@ export class AwsMocks implements pulumi.runtime.Mocks {
         }
 
         if (type === "aws:iam/openIdConnectProvider:OpenIdConnectProvider") {
-            state.arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com";
+            state.arn =
+                "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com";
         }
 
         if (type === "aws:wafv2/webAcl:WebAcl") {

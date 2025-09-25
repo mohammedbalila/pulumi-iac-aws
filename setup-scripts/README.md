@@ -17,14 +17,14 @@ Install these tools before running any script:
 
 ## Script Catalog
 
-| Script | Purpose | Key prerequisites | Primary output |
-| --- | --- | --- | --- |
-| `interactive-setup.sh` | Guided wizard that chains validation, IAM provisioning, Pulumi deploys, and GitHub config hints. | AWS CLI admin credentials, Pulumi, jq, node/npm | Prompts, environment deployments, follow-up checklist |
-| `validate-setup.sh` | Sanity-check tooling, AWS auth, project structure, and Pulumi stacks. | AWS CLI, Pulumi, jq, node/npm | Diagnostic report in terminal |
-| `create-iac-user.sh` | Creates (or updates) the IAM user and policy Pulumi uses, then issues access keys. | AWS CLI admin credentials, jq | IAM user, managed policy, access keys |
-| `get-github-vars.sh` | Discovers GitHub Actions role ARNs, App Runner ARNs, and ECR repositories for a stack. Generates documentation you can copy into GitHub. | AWS CLI authenticated as IaC user, jq, Pulumi (optional but enhances detection) | Regenerated `github-actions-config.md` summary |
-| `configure-github-secrets.sh` | Uses the GitHub CLI to push secrets/variables into a repository based on Pulumi state. | AWS CLI, Pulumi, jq, authenticated `gh` CLI | Repository secrets/variables set remotely |
-| `get-github-vars.sh` (sourced) | When sourced, exposes helper functions (`get_github_role_arn`, `check_environment`, etc.) used by other scripts. | Same as above | Reusable shell functions |
+| Script                         | Purpose                                                                                                                                  | Key prerequisites                                                               | Primary output                                        |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `interactive-setup.sh`         | Guided wizard that chains validation, IAM provisioning, Pulumi deploys, and GitHub config hints.                                         | AWS CLI admin credentials, Pulumi, jq, node/npm                                 | Prompts, environment deployments, follow-up checklist |
+| `validate-setup.sh`            | Sanity-check tooling, AWS auth, project structure, and Pulumi stacks.                                                                    | AWS CLI, Pulumi, jq, node/npm                                                   | Diagnostic report in terminal                         |
+| `create-iac-user.sh`           | Creates (or updates) the IAM user and policy Pulumi uses, then issues access keys.                                                       | AWS CLI admin credentials, jq                                                   | IAM user, managed policy, access keys                 |
+| `get-github-vars.sh`           | Discovers GitHub Actions role ARNs, App Runner ARNs, and ECR repositories for a stack. Generates documentation you can copy into GitHub. | AWS CLI authenticated as IaC user, jq, Pulumi (optional but enhances detection) | Regenerated `github-actions-config.md` summary        |
+| `configure-github-secrets.sh`  | Uses the GitHub CLI to push secrets/variables into a repository based on Pulumi state.                                                   | AWS CLI, Pulumi, jq, authenticated `gh` CLI                                     | Repository secrets/variables set remotely             |
+| `get-github-vars.sh` (sourced) | When sourced, exposes helper functions (`get_github_role_arn`, `check_environment`, etc.) used by other scripts.                         | Same as above                                                                   | Reusable shell functions                              |
 
 ## Usage Flows
 
@@ -36,6 +36,7 @@ chmod +x setup-scripts/interactive-setup.sh
 ```
 
 The wizard:
+
 - Verifies tooling via `validate-setup.sh`
 - Offers to create/refresh the IaC IAM user via `create-iac-user.sh`
 - Builds TypeScript and walks through Pulumi stack configuration per environment
@@ -46,43 +47,45 @@ You can rerun the wizard safely; it keeps existing stacks and IAM resources inta
 ### Option B — Manual workflow
 
 1. **Validate prerequisites**
-   ```bash
-   chmod +x setup-scripts/validate-setup.sh
-   ./setup-scripts/validate-setup.sh
-   ```
+    ```bash
+    chmod +x setup-scripts/validate-setup.sh
+    ./setup-scripts/validate-setup.sh
+    ```
 2. **Create (or update) the IaC IAM user**
-   ```bash
-   chmod +x setup-scripts/create-iac-user.sh
-   ./setup-scripts/create-iac-user.sh
-   ```
+    ```bash
+    chmod +x setup-scripts/create-iac-user.sh
+    ./setup-scripts/create-iac-user.sh
+    ```
 3. **Configure AWS credentials** using the access keys produced (environment variables or `aws configure --profile iac-user`).
 4. **Build and deploy infrastructure**
-   ```bash
-   npm run build
-   npm run dev:up        # add staging:up / prod:up as needed
-   ```
+    ```bash
+    npm run build
+    npm run dev:up        # add staging:up / prod:up as needed
+    ```
 5. **Gather GitHub settings**
-   ```bash
-   chmod +x setup-scripts/get-github-vars.sh
-   ./setup-scripts/get-github-vars.sh --dev       # or --staging / --prod
-   ```
-   This regenerates `setup-scripts/github-actions-config.md` with secrets, variables, and workflow guidance.
+    ```bash
+    chmod +x setup-scripts/get-github-vars.sh
+    ./setup-scripts/get-github-vars.sh --dev       # or --staging / --prod
+    ```
+    This regenerates `setup-scripts/github-actions-config.md` with secrets, variables, and workflow guidance.
 6. **(Optional) Push secrets to GitHub automatically**
-   ```bash
-   chmod +x setup-scripts/configure-github-secrets.sh
-   ./setup-scripts/configure-github-secrets.sh --dev
-   ```
-   Requires `gh auth login` against the target repository with admin permission.
+    ```bash
+    chmod +x setup-scripts/configure-github-secrets.sh
+    ./setup-scripts/configure-github-secrets.sh --dev
+    ```
+    Requires `gh auth login` against the target repository with admin permission.
 
 ## Script Details
 
 ### `validate-setup.sh`
+
 - Confirms AWS CLI authentication, Pulumi availability, Node/npm versions, Docker status, and jq.
 - Builds the TypeScript project to surface compiler issues early.
 - Checks each environment directory for Pulumi stacks and notes deployment timestamps.
 - Exercises baseline AWS permissions (EC2, ECR, IAM) so missing privileges are flagged immediately.
 
 ### `create-iac-user.sh`
+
 - Creates the IAM user `iac-user` (override via `IAC_USER_NAME`).
 - Manages the IaC policy (`IaCFullAccessPolicy` by default) with update-on-change semantics.
 - Attaches the policy to the user and optionally rotates access keys.
@@ -90,12 +93,14 @@ You can rerun the wizard safely; it keeps existing stacks and IAM resources inta
 - Cleans up the temporary policy document automatically.
 
 ### `get-github-vars.sh`
+
 - Requires an environment flag (`--dev`, `--staging`, or `--prod`). Run it once per environment to capture ARNs.
 - Uses Pulumi (if available) plus AWS CLI lookups to confirm that GitHub Actions roles, App Runner services, and ECR repositories exist.
 - Writes a comprehensive cheat sheet to `setup-scripts/github-actions-config.md` and echoes highlights to stdout.
 - Exposes helper functions when sourced; other scripts (like `configure-github-secrets.sh`) load these helpers instead of reimplementing AWS lookups.
 
 ### `configure-github-secrets.sh`
+
 - Wraps `gh secret set` / `gh variable set` with Pulumi- and AWS-derived values.
 - Requires a single environment flag and validates toolchain availability (`aws`, `pulumi`, `jq`, `gh`).
 - Verifies repository access and ensures the caller has admin rights before attempting to mutate secrets.
@@ -103,6 +108,7 @@ You can rerun the wizard safely; it keeps existing stacks and IAM resources inta
 - Useful after running `pulumi up` so GitHub Actions jobs can assume the correct AWS role without manual copying.
 
 ### `interactive-setup.sh`
+
 - Provides an end-to-end onboarding experience, with opt-in prompts at each milestone.
 - Delegates to `validate-setup.sh`, `create-iac-user.sh`, and Pulumi commands while surfacing next steps (e.g., configuring GitHub secrets).
 - Safe to run multiple times; it detects existing stacks and will not overwrite your GitHub secrets automatically.
@@ -119,11 +125,11 @@ export IAC_POLICY_NAME="MyIaCPolicy"
 
 Default values:
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `IAC_USER_NAME` | `iac-user` | IAM username created for Pulumi |
-| `IAC_POLICY_NAME` | `IaCFullAccessPolicy` | Managed policy attached to the user |
-| `AWS_REGION` | `eu-west-3` | Region assumed by scripts when one is not configured |
+| Variable          | Default               | Description                                          |
+| ----------------- | --------------------- | ---------------------------------------------------- |
+| `IAC_USER_NAME`   | `iac-user`            | IAM username created for Pulumi                      |
+| `IAC_POLICY_NAME` | `IaCFullAccessPolicy` | Managed policy attached to the user                  |
+| `AWS_REGION`      | `eu-west-3`           | Region assumed by scripts when one is not configured |
 
 ## Generated Files
 
