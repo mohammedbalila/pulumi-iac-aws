@@ -5,11 +5,13 @@ import { AppRunnerService } from "../modules/compute";
 
 describe("AppRunnerService", () => {
     it("creates a public service and VPC connector when subnets/SGs provided", async () => {
-        await withPulumiMocks(async () => {
+        await withPulumiMocks(async (_mocks) => {
             const svc = new AppRunnerService("test-app-dev", {
                 name: "test-app",
                 environment: "dev",
-                repositoryUrl: "https://github.com/example/repo",
+                ecrImageUri: pulumi.output(
+                    "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+                ),
                 databaseUrl: pulumi.output("postgres://user:pw@host:5432/db"),
                 vpcSubnetIds: [pulumi.output("subnet-1"), pulumi.output("subnet-2")],
                 vpcSecurityGroupIds: [pulumi.output("sg-123")],

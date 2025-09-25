@@ -4,6 +4,93 @@ import { NetworkingArgs } from "../../shared/types";
 import { commonTags } from "../../shared/config";
 import { FckNat } from "./fck-nat";
 
+const DEFAULT_VPC_CIDR = "10.0.0.0/24";
+const PREFERRED_SUBNET_PREFIX = 26;
+const MAX_SUBNET_PREFIX = 28; // AWS does not support subnets smaller than /28
+
+const parseCidr = (cidr: string): { baseIp: number; prefix: number } => {
+    const [network, prefixPart] = cidr.split("/");
+    if (!network || !prefixPart) {
+        throw new pulumi.RunError(`Invalid CIDR block: ${cidr}`);
+    }
+
+    const octets = network.split(".").map((segment) => {
+        const value = Number(segment);
+        if (!Number.isInteger(value) || value < 0 || value > 255) {
+            throw new pulumi.RunError(`Invalid IPv4 address in CIDR block: ${cidr}`);
+        }
+        return value;
+    });
+
+    if (octets.length !== 4) {
+        throw new pulumi.RunError(`CIDR block must contain four octets: ${cidr}`);
+    }
+
+    const prefix = Number(prefixPart);
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+        throw new pulumi.RunError(`CIDR prefix must be between 0 and 32: ${cidr}`);
+    }
+
+    const baseIp = octets[0] * 256 ** 3 + octets[1] * 256 ** 2 + octets[2] * 256 ** 1 + octets[3];
+
+    return { baseIp, prefix };
+};
+
+const intToIp = (value: number): string => {
+    return [
+        Math.floor(value / 256 ** 3) % 256,
+        Math.floor(value / 256 ** 2) % 256,
+        Math.floor(value / 256) % 256,
+        value % 256,
+    ].join(".");
+};
+
+const determineSubnetPrefix = (basePrefix: number, subnetCount: number): number => {
+    const minimumAdditionalBits = Math.ceil(Math.log2(subnetCount));
+    const minimumPrefix = basePrefix + minimumAdditionalBits;
+    const preferredPrefix = Math.max(PREFERRED_SUBNET_PREFIX, basePrefix);
+    const subnetPrefix = Math.max(preferredPrefix, minimumPrefix);
+
+    if (subnetPrefix > MAX_SUBNET_PREFIX) {
+        throw new pulumi.RunError(
+            `Cannot create ${subnetCount} subnets from CIDR /${basePrefix}.` +
+                " Increase the VPC CIDR size or reduce the number of subnets per AZ.",
+        );
+    }
+
+    return subnetPrefix;
+};
+
+const deriveSubnetCidr = (baseCidr: string, subnetPrefix: number, subnetIndex: number): string => {
+    const { baseIp, prefix: basePrefix } = parseCidr(baseCidr);
+
+    if (subnetPrefix < basePrefix) {
+        throw new pulumi.RunError(
+            `Subnet prefix /${subnetPrefix} cannot be smaller than VPC prefix /${basePrefix}.`,
+        );
+    }
+
+    const subnetSize = 2 ** (32 - subnetPrefix);
+    const baseNetwork = Math.floor(baseIp / 2 ** (32 - basePrefix)) * 2 ** (32 - basePrefix);
+    const availableSubnets = 2 ** (subnetPrefix - basePrefix);
+
+    if (subnetIndex >= availableSubnets) {
+        throw new pulumi.RunError(
+            `CIDR ${baseCidr} does not have capacity for subnet index ${subnetIndex}. ` +
+                `Supports up to ${availableSubnets} subnets of size /${subnetPrefix}.`,
+        );
+    }
+
+    const subnetBase = baseNetwork + subnetIndex * subnetSize;
+    return `${intToIp(subnetBase)}/${subnetPrefix}`;
+};
+
+export const __testing = {
+    parseCidr,
+    determineSubnetPrefix,
+    deriveSubnetCidr,
+};
+
 export class Networking extends pulumi.ComponentResource {
     public vpc: aws.ec2.Vpc;
     public privateSubnets: aws.ec2.Subnet[];
@@ -23,7 +110,7 @@ export class Networking extends pulumi.ComponentResource {
         this.vpc = new aws.ec2.Vpc(
             `${args.name}-vpc`,
             {
-                cidrBlock: args.cidrBlock || "10.0.0.0/24", // /24 = 256 IPs
+                cidrBlock: args.cidrBlock || DEFAULT_VPC_CIDR,
                 enableDnsHostnames: true,
                 enableDnsSupport: true,
                 tags: {
@@ -37,6 +124,14 @@ export class Networking extends pulumi.ComponentResource {
         // Get availability zones - limit to 2 for cost optimization
         const azs = aws.getAvailabilityZones({ state: "available" });
         const azCount = args.availabilityZoneCount || 2;
+        if (azCount < 1) {
+            throw new pulumi.RunError("availabilityZoneCount must be at least 1");
+        }
+
+        const baseCidr = args.cidrBlock || DEFAULT_VPC_CIDR;
+        const { prefix: basePrefix } = parseCidr(baseCidr);
+        const totalSubnets = azCount * 2;
+        const subnetPrefix = determineSubnetPrefix(basePrefix, totalSubnets);
 
         // Create Internet Gateway
         this.internetGateway = new aws.ec2.InternetGateway(
@@ -54,12 +149,20 @@ export class Networking extends pulumi.ComponentResource {
         // Create public subnets
         this.publicSubnets = [];
         for (let i = 0; i < azCount; i++) {
+            const cidrBlock = deriveSubnetCidr(baseCidr, subnetPrefix, i);
             const publicSubnet = new aws.ec2.Subnet(
                 `${args.name}-public-${i}`,
                 {
                     vpcId: this.vpc.id,
-                    cidrBlock: `10.0.0.${i * 64}/26`, // /26 = 64 IPs per subnet
-                    availabilityZone: azs.then((azs) => azs.names[i]),
+                    cidrBlock: cidrBlock,
+                    availabilityZone: azs.then((response) => {
+                        if (i >= response.names.length) {
+                            throw new pulumi.RunError(
+                                `Requested ${azCount} availability zones, but only ${response.names.length} are available in this region.`,
+                            );
+                        }
+                        return response.names[i];
+                    }),
                     mapPublicIpOnLaunch: true,
                     tags: {
                         ...tags,
@@ -75,12 +178,20 @@ export class Networking extends pulumi.ComponentResource {
         // Create private subnets
         this.privateSubnets = [];
         for (let i = 0; i < azCount; i++) {
+            const cidrBlock = deriveSubnetCidr(baseCidr, subnetPrefix, azCount + i);
             const privateSubnet = new aws.ec2.Subnet(
                 `${args.name}-private-${i}`,
                 {
                     vpcId: this.vpc.id,
-                    cidrBlock: `10.0.0.${128 + i * 64}/26`, // Start from .128 for private
-                    availabilityZone: azs.then((azs) => azs.names[i]),
+                    cidrBlock: cidrBlock,
+                    availabilityZone: azs.then((response) => {
+                        if (i >= response.names.length) {
+                            throw new pulumi.RunError(
+                                `Requested ${azCount} availability zones, but only ${response.names.length} are available in this region.`,
+                            );
+                        }
+                        return response.names[i];
+                    }),
                     tags: {
                         ...tags,
                         Name: `${args.name}-private-${i}`,

@@ -43,7 +43,15 @@ export class Monitoring extends pulumi.ComponentResource {
         this.createDatabaseAlarms(args);
         this.createLambdaAlarms(args);
         this.createSloAlarms(args);
-        this.createCostMonitoring(args);
+        const enableCostBudget = args.enableCostBudget ?? true;
+        const enableCostAnomaly = args.enableCostAnomaly ?? false;
+        if (enableCostBudget || enableCostAnomaly) {
+            this.createCostMonitoring({
+                ...args,
+                enableCostBudget,
+                enableCostAnomaly,
+            });
+        }
 
         this.registerOutputs({
             dashboardUrl: this.getDashboardUrl(),
@@ -495,73 +503,83 @@ export class Monitoring extends pulumi.ComponentResource {
     }
 
     private createCostMonitoring(args: MonitoringArgs): void {
+        const enableBudget = args.enableCostBudget ?? true;
+        const enableAnomaly = args.enableCostAnomaly ?? false;
+
+        if (!enableBudget && !enableAnomaly) {
+            return;
+        }
+
         const tags = commonTags(args.environment);
         const budgetAmount = args.environment === "prod" ? "200" : "50";
 
-        this.costBudget = new aws.budgets.Budget(
-            `${args.name}-cost-budget`,
-            {
-                name: `${args.name}-monthly-budget-${args.environment}`,
-                budgetType: "COST",
-                limitAmount: budgetAmount,
-                limitUnit: "USD",
-                timeUnit: "MONTHLY",
-                timePeriodStart: `${new Date().toISOString().substring(0, 7)}-01_00:00`,
-                costFilters: [
-                    {
-                        name: "TagKeyValue",
-                        values: [pulumi.interpolate`Environment$${args.environment}`],
-                    },
-                ],
-                notifications: [
-                    {
-                        comparisonOperator: "GREATER_THAN",
-                        threshold: 80,
-                        thresholdType: "PERCENTAGE",
-                        notificationType: "ACTUAL",
-                        subscriberEmailAddresses: args.alertEmail ? [args.alertEmail] : [],
-                    },
-                    {
-                        comparisonOperator: "GREATER_THAN",
-                        threshold: 100,
-                        thresholdType: "PERCENTAGE",
-                        notificationType: "FORECASTED",
-                        subscriberEmailAddresses: args.alertEmail ? [args.alertEmail] : [],
-                    },
-                ],
-                tags: tags,
-            },
-            { parent: this },
-        );
-
-        this.costAnomalyMonitor = new costexplorer.AnomalyMonitor(
-            `${args.name}-cost-anomaly`,
-            {
-                name: `${args.name}-cost-anomaly-${args.environment}`,
-                monitorType: "DIMENSIONAL",
-                monitorDimension: "SERVICE",
-                tags: tags,
-            },
-            { parent: this },
-        );
-
-        if (args.alertEmail) {
-            this.costAnomalySubscription = new costexplorer.AnomalySubscription(
-                `${args.name}-anomaly-subscription`,
+        if (enableBudget) {
+            this.costBudget = new aws.budgets.Budget(
+                `${args.name}-cost-budget`,
                 {
-                    name: `${args.name}-anomaly-subscription-${args.environment}`,
-                    frequency: "DAILY",
-                    monitorArnLists: [this.costAnomalyMonitor.arn],
-                    subscribers: [
+                    name: `${args.name}-monthly-budget-${args.environment}`,
+                    budgetType: "COST",
+                    limitAmount: budgetAmount,
+                    limitUnit: "USD",
+                    timeUnit: "MONTHLY",
+                    costFilters: [
                         {
-                            type: "EMAIL",
-                            address: args.alertEmail,
+                            name: "TagKeyValue",
+                            values: [pulumi.interpolate`Environment$${args.environment}`],
+                        },
+                    ],
+                    notifications: [
+                        {
+                            comparisonOperator: "GREATER_THAN",
+                            threshold: 80,
+                            thresholdType: "PERCENTAGE",
+                            notificationType: "ACTUAL",
+                            subscriberEmailAddresses: args.alertEmail ? [args.alertEmail] : [],
+                        },
+                        {
+                            comparisonOperator: "GREATER_THAN",
+                            threshold: 100,
+                            thresholdType: "PERCENTAGE",
+                            notificationType: "FORECASTED",
+                            subscriberEmailAddresses: args.alertEmail ? [args.alertEmail] : [],
                         },
                     ],
                     tags: tags,
                 },
                 { parent: this },
             );
+        }
+
+        if (enableAnomaly) {
+            this.costAnomalyMonitor = new costexplorer.AnomalyMonitor(
+                `${args.name}-cost-anomaly`,
+                {
+                    name: `${args.name}-cost-anomaly-${args.environment}`,
+                    monitorType: "DIMENSIONAL",
+                    monitorDimension: "SERVICE",
+                    tags: tags,
+                },
+                { parent: this },
+            );
+
+            if (args.alertEmail) {
+                this.costAnomalySubscription = new costexplorer.AnomalySubscription(
+                    `${args.name}-anomaly-subscription`,
+                    {
+                        name: `${args.name}-anomaly-subscription-${args.environment}`,
+                        frequency: "DAILY",
+                        monitorArnLists: [this.costAnomalyMonitor.arn],
+                        subscribers: [
+                            {
+                                type: "EMAIL",
+                                address: args.alertEmail,
+                            },
+                        ],
+                        tags: tags,
+                    },
+                    { parent: this },
+                );
+            }
         }
     }
 

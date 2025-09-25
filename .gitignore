@@ -28,6 +28,10 @@ Thumbs.db
 
 # Pulumi
 .pulumi/
+Pulumi.dev.yaml
+Pulumi.staging.yaml
+Pulumi.prod.yaml
+environments/*/Pulumi.*.yaml
 
 # Logs
 logs/

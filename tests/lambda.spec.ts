@@ -5,7 +5,7 @@ import { LambdaFunction } from "../modules/lambda";
 
 describe("LambdaFunction", () => {
     it("configures VPC when subnets/SGs provided and sets env vars", async () => {
-        await withPulumiMocks(async () => {
+        await withPulumiMocks(async (_mocks) => {
             const lf = new LambdaFunction("lambda-dev", {
                 name: "my-func",
                 environment: "dev",

@@ -54,6 +54,19 @@ pulumi-infrastructure/
 └── docs/                 # Additional documentation
 ```
 
+## Setup Resources
+
+### setup-files
+
+- Houses reusable templates referenced during onboarding (e.g., `deploy.yml` for GitHub Actions, baseline IAM policies).
+- None of these templates are consumed directly by Pulumi—copy them into your GitHub repository or IAM workflows and tailor as needed.
+
+### setup-scripts
+
+- Shell utilities that bootstrap IAM users, validate prerequisites, deploy stacks, and configure GitHub Actions secrets.
+- Start with `interactive-setup.sh` for a guided flow or run `validate-setup.sh`, `create-iac-user.sh`, and `get-github-vars.sh` individually.
+- See `setup-scripts/README.md` for prerequisites, sample commands, and troubleshooting guidance.
+
 ## Quick Start
 
 ### Prerequisites
@@ -62,7 +75,8 @@ pulumi-infrastructure/
 2. **AWS CLI**: [Install and configure AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 3. **Pulumi**: [Install Pulumi CLI](https://www.pulumi.com/docs/install/)
 4. **Node.js**: Version 22 or later
-5. **GitHub Repository**: For App Runner source integration
+5. **Docker**: For building container images for App Runner
+6. **GitHub Repository**: Used by CI/CD to build and push container images
 
 ### 1. Setup
 
@@ -99,12 +113,12 @@ cd environments/dev
 
 # Set required configuration
 pulumi config set appName "your-app-name"
-pulumi config set repositoryUrl "https://github.com/username/your-repo"
+pulumi config set githubOrg "your-github-org"
+pulumi config set githubRepo "your-service-repo"
 pulumi config set --secret dbPassword "your-secure-password"
 pulumi config set alertEmail "your-email@example.com"
 
 # Optional configuration
-pulumi config set branch "develop"
 pulumi config set apiBaseUrl "https://api.example.com"
 ```
 
@@ -115,7 +129,8 @@ cd ../staging
 
 # Set configuration for staging
 pulumi config set appName "your-app-name"
-pulumi config set repositoryUrl "https://github.com/username/your-repo"
+pulumi config set githubOrg "your-github-org"
+pulumi config set githubRepo "your-service-repo"
 pulumi config set --secret dbPassword "your-staging-password"
 pulumi config set alertEmail "your-email@example.com"
 ```
@@ -127,7 +142,8 @@ cd ../prod
 
 # Set configuration for production
 pulumi config set appName "your-app-name"
-pulumi config set repositoryUrl "https://github.com/username/your-repo"
+pulumi config set githubOrg "your-github-org"
+pulumi config set githubRepo "your-service-repo"
 pulumi config set --secret dbPassword "your-production-password"
 pulumi config set alertEmail "your-email@example.com" # REQUIRED for production
 
@@ -260,39 +276,6 @@ Required secrets for a deploy workflow (if you add one): `AWS_ACCESS_KEY_ID`, `A
 
 ## Customization
 
-### Adding Lambda Functions
-
-1. **Create function in Lambda module**:
-
-```typescript
-const newLambda = lambdaGroup.addFunction(`${appName}-new-function`, {
-    name: `${appName}-new-function`,
-    environment: environment,
-    runtime: "nodejs22.x",
-    handler: "index.handler",
-    code: new pulumi.asset.AssetArchive({
-        "index.js": new pulumi.asset.StringAsset(`
-            exports.handler = async (event) => {
-                // Your function logic
-                return { statusCode: 200, body: "Success" };
-            };
-        `),
-    }),
-    environmentVariables: {
-        DATABASE_URL: database.getConnectionString(),
-    },
-});
-```
-
-2. **Add to monitoring**:
-
-```typescript
-lambdaFunctionNames: [
-    `${appName}-example-${environment}`,
-    `${appName}-new-function-${environment}`, // Add this line
-],
-```
-
 ### Modifying App Runner Configuration
 
 Edit the App Runner configuration in each environment:
@@ -308,6 +291,21 @@ const appService = new AppRunnerService(`${appName}-${environment}-app`, {
     memory: "2 GB", // Upgrade if needed
 });
 ```
+
+### Modifying Database Configuration
+Edit the RDS configuration in each environment:
+
+```typescript
+// In environments/{env}/index.ts
+const dbInstance = new rds.Instance(`${appName}-${environment}-db`, {
+    instanceClass: "db.t4g.small", // Upgrade if needed
+    allocatedStorage: 20, // Increase if needed
+    maxAllocatedStorage: 100, // Increase if needed
+    backupRetentionPeriod: 7, // Adjust as needed
+});
+```
+
+> The same applies to Lambda functions and other resources.
 
 ## Maintenance Tasks
 
@@ -333,28 +331,15 @@ const appService = new AppRunnerService(`${appName}-${environment}-app`, {
 
 ### Common Issues
 
-#### App Runner Deployment Fails
+#### App Runner Deployment Fails (normally in the 1st deploy because ECR repo will be empty)
 
 ```bash
 # Check App Runner logs
 aws apprunner list-services
 aws apprunner describe-service --service-arn <service-arn>
 
-# Check GitHub connection
-cd environments/<env>
-pulumi stack output connectionArn
-```
-
-#### Database Connection Issues
-
-```bash
-# Test database connectivity
-cd environments/<env>
-pulumi stack output databaseEndpoint
-
-# Check security groups
-pulumi stack output dbSecurityGroupId
-aws ec2 describe-security-groups --group-ids $(pulumi stack output dbSecurityGroupId)
+# Confirm a container image is available in ECR
+aws ecr describe-images --repository-name <repository-name>
 ```
 
 #### Lambda Function Errors
@@ -384,22 +369,19 @@ pulumi stack output exampleLambdaArn
 ### Application Recovery
 
 1. **App Runner**: Automatically handles instance failures
-2. **Lambda**: Built-in fault tolerance and retries
+2. **Lambda**: Built-in fault tolerance and retries & DLQs
 3. **Infrastructure**: Recreate from Pulumi code
-
-## Scaling Considerations
-
-### Horizontal Scaling
-
-- App Runner: Increase `maxSize` and `maxConcurrency`
-- Lambda: Increase `reservedConcurrentExecutions`
-- Database: Add read replicas for read-heavy workloads
 
 ### Vertical Scaling
 
 - Database: Upgrade to larger instance class
 - App Runner: Increase CPU/memory allocation
 - Lambda: Increase memory allocation
+
+### Horizontal Scaling
+- App Runner: Adjust min/max size and concurrency settings
+- Database: Scale storage automatically; consider read replicas for read-heavy workloads
+- Lambda: Increase reserved concurrency if needed
 
 ### Cost vs Performance Trade-offs
 
@@ -409,55 +391,29 @@ pulumi stack output exampleLambdaArn
 
 ---
 
-## Support
-
-For questions or issues:
-
-1. Check this documentation first
-2. Review CloudWatch logs and metrics
-3. Consult AWS documentation
-4. Create GitHub issue for infrastructure problems
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-### Runtime Secrets with SSM Parameter Store
-
-1. Create parameters (SecureString) in SSM, e.g.:
-
-```
-aws ssm put-parameter --name /app/<appName>/<env>/DATABASE_URL --type SecureString --value 'postgres://...'
-```
-
-2. Grant read access by passing allowed paths when creating resources:
-
-```typescript
-const appService = new AppRunnerService(`${appName}-${environment}-app`, {
-    // ...
-    ssmParameterPaths: [`/app/${appName}/${environment}/`], // enables ssm:GetParameter(s) on this prefix
-});
-
-const myLambda = lambdaGroup.addFunction(`${appName}-${environment}-worker`, {
-    // ...
-    ssmParameterPaths: [`/app/${appName}/${environment}/`],
-});
-```
-
-3. Read parameters in your app at runtime using the AWS SDK.
-
 ### Enabling WAF and CloudFront
 
 - WAF (App Runner): enabled by default in production. To override per environment:
 
-```
+```bash
 pulumi config set enableWaf true   # or false
 ```
 
 - CloudFront (optional): place a distribution in front of App Runner for edge protections/caching:
 
-```
+```bash
 pulumi config set enableCloudFront true
 ```
 
-Stack outputs will include `wafArn` and `cloudFrontDomainName` when enabled.
+```bash
+pulumi config set enableWaf true   # or false
+```
+
+- CloudFront (optional): place a distribution in front of App Runner for edge protections/caching:
+```bash
+pulumi config set enableCloudFront true
+```
+
+```bash
+pulumi config set enableCloudFront true
+```

@@ -1,0 +1,32 @@
+config:
+  aws:region: eu-west-3
+  aws:profile: default # UPDATE: production deploy profile
+
+  # Application configuration
+  pulumi-aws-infrastructure:appName: your-app-name
+  pulumi-aws-infrastructure:githubOrg: your-github-org
+  pulumi-aws-infrastructure:githubRepo: your-service-repo
+  pulumi-aws-infrastructure:branch: main
+
+  # Database configuration
+  pulumi-aws-infrastructure:dbUsername: postgres
+  pulumi-aws-infrastructure:dbPassword:
+    secure: <set-with-pulumi-config-set-secret>
+
+  # Monitoring configuration (REQUIRED for production)
+  pulumi-aws-infrastructure:alertEmail: notifications@example.com
+  pulumi-aws-infrastructure:enableCostBudget: "true"
+  pulumi-aws-infrastructure:enableCostAnomaly: "false"
+
+  # API configuration
+  pulumi-aws-infrastructure:apiBaseUrl: https://api.example.com
+
+  # Feature flags
+  pulumi-aws-infrastructure:enableNewFeature: false
+
+  # External services (optional)
+  pulumi-aws-infrastructure:redisUrl: <redis-url-if-used>
+  pulumi-aws-infrastructure:sentryDsn: <sentry-dsn-if-used>
+
+  # Cost center for billing
+  pulumi-aws-infrastructure:costCenter: production

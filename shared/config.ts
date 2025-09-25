@@ -6,7 +6,7 @@ export function getEnvironmentConfig(environment: string): EnvironmentConfig {
 
     const baseConfig: EnvironmentConfig = {
         name: environment,
-        region: config.get("aws:region") || "us-west-2",
+        region: config.get("aws:region") || "eu-west-3",
         tags: {
             Environment: environment,
             Project: "pulumi-aws-infrastructure",

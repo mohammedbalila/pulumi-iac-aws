@@ -5,7 +5,7 @@ import { AppWaf } from "../modules/waf";
 
 describe("AppWaf", () => {
     it("creates a WebACL and associates it to the resource", async () => {
-        await withPulumiMocks(async () => {
+        await withPulumiMocks(async (_mocks) => {
             const waf = new AppWaf("waf-dev", {
                 name: "app",
                 environment: "dev",

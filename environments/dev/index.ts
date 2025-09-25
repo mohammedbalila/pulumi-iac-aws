@@ -4,50 +4,132 @@ import { Networking } from "../../modules/networking";
 import { Database } from "../../modules/database";
 import { AppRunnerService } from "../../modules/compute";
 import { LambdaGroup } from "../../modules/lambda";
-import { LambdaCicdPipeline } from "../../modules/cicd";
 import { Monitoring } from "../../modules/monitoring";
 import { AppWaf } from "../../modules/waf";
+import { ECRRepository } from "../../modules/ecr";
+import { GitHubActionsRole } from "../../modules/cicd/github-actions-role";
 import { getEnvironmentConfig } from "../../shared/config";
+import { buildDatabaseConnectionString } from "../../shared/database";
+import { derivePlaceholderSeedConfig } from "../../shared/ecr";
+import {
+    APPLICATION_CONSTANTS,
+    DATABASE_CONSTANTS,
+    APP_RUNNER_CONSTANTS,
+    LAMBDA_CONSTANTS,
+    ECR_CONSTANTS,
+    NETWORKING_CONSTANTS,
+    WAF_CONSTANTS,
+    CLOUDFRONT_CONSTANTS,
+    GITHUB_CONSTANTS,
+    FEATURE_FLAGS,
+} from "../../shared/constants";
 
 // Get configuration for this environment
 const config = new pulumi.Config();
 const envConfig = getEnvironmentConfig("dev");
 
 // Configuration values
-const appName = config.get("appName") || "my-app";
-const repositoryUrl = config.require("repositoryUrl"); // e.g., "https://github.com/username/repo"
-const dbUsername = config.get("dbUsername") || "postgres";
-const dbPassword = config.requireSecret("dbPassword");
-const alertEmail = config.get("alertEmail");
-const enableCloudFront = config.getBoolean("enableCloudFront") || false;
-const enableWaf = config.getBoolean("enableWaf") || false; // default off for dev unless set
-const lambdaRepoOwner = config.require("lambdaRepoOwner");
-const lambdaRepoName = config.require("lambdaRepoName");
-const lambdaRepoBranch = config.get("lambdaRepoBranch") || "main";
-const lambdaConnectionArn = config.require("lambdaConnectionArn");
-const lambdaAliasName = config.get("lambdaAliasName") || "live";
+const appName =
+    config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.APP_NAME) ||
+    APPLICATION_CONSTANTS.DEFAULT_APP_NAME;
+const dbUsername =
+    config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.DB_USERNAME) ||
+    APPLICATION_CONSTANTS.DEFAULT_DB_USERNAME;
+const dbPassword = config.requireSecret(APPLICATION_CONSTANTS.CONFIG_KEYS.DB_PASSWORD);
+const dbName = `${appName.replace(/-/g, "_")}_dev`;
+const alertEmail = config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.ALERT_EMAIL);
+const enableCloudFront =
+    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_CLOUDFRONT) || false;
+const enableWaf = config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_WAF) || false;
+const enableCostBudget = config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_BUDGET);
+const enableCostAnomaly =
+    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_ANOMALY) || false;
+
+const configuredEcrImageUri = config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.ECR_IMAGE_URI);
+const placeholderSeedConfig = derivePlaceholderSeedConfig(configuredEcrImageUri);
+
+if (placeholderSeedConfig.warning) {
+    pulumi.log.warn(placeholderSeedConfig.warning);
+}
+
+// GitHub configuration for CI/CD
+const githubOrg =
+    config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.GITHUB_ORG) ||
+    APPLICATION_CONSTANTS.DEFAULT_GITHUB_ORG;
+const githubRepo =
+    config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.GITHUB_REPO) ||
+    APPLICATION_CONSTANTS.DEFAULT_GITHUB_REPO;
+
+// Get current AWS account and region
+const currentAccount = aws.getCallerIdentity();
+const currentRegion = aws.getRegion();
+
+// Create ECR repository for this environment
+const ecrRepository = new ECRRepository(
+    `${appName}-dev-${APPLICATION_CONSTANTS.RESOURCE_TYPES.ECR_REPOSITORY}`,
+    {
+        name: appName,
+        environment: "dev",
+        retentionDays: ECR_CONSTANTS.RETENTION_DAYS.DEV,
+        imageMutability: ECR_CONSTANTS.IMAGE_MUTABILITY.MUTABLE,
+        scanOnPush: true,
+        seedWithPlaceholderImage: placeholderSeedConfig.enabled,
+        placeholderImageTag: placeholderSeedConfig.tag,
+    },
+);
+
+const placeholderSeedResource = ecrRepository.getPlaceholderSeedResource();
+
+// Create GitHub Actions role for CI/CD
+
+const githubActionsRole = new GitHubActionsRole(
+    `${appName}-dev-${APPLICATION_CONSTANTS.RESOURCE_TYPES.GITHUB_ACTIONS_ROLE}`,
+    {
+        name: appName,
+        environment: "dev",
+        githubOrg: githubOrg,
+        githubRepo: githubRepo,
+        githubBranches: GITHUB_CONSTANTS.BRANCHES.DEV,
+        githubEnvironments: GITHUB_CONSTANTS.ENVIRONMENTS.DEV,
+        ecrRepositoryArns: [ecrRepository.getRepositoryArn()],
+    },
+);
 
 // Create networking infrastructure with fck-nat for cost savings
 const networking = new Networking(`${appName}-dev`, {
     name: appName,
     environment: "dev",
-    cidrBlock: "10.0.0.0/24",
-    availabilityZoneCount: 2,
-    useFckNat: config.getBoolean("useFckNat") ?? true, // Default to fck-nat for cost savings
+    cidrBlock: NETWORKING_CONSTANTS.CIDR_BLOCKS.DEV,
+    availabilityZoneCount: NETWORKING_CONSTANTS.AVAILABILITY_ZONES.DEV,
+    useFckNat: config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.USE_FCK_NAT) ?? true, // Default to fck-nat for cost savings
 });
 
 // Security groups for App Runner and Lambda to reach private resources (e.g., RDS)
 const apprunnerSg = new aws.ec2.SecurityGroup(`${appName}-dev-apprunner-sg`, {
     description: "App Runner egress SG",
     vpcId: networking.vpc.id,
-    egress: [{ fromPort: 0, toPort: 0, protocol: "-1", cidrBlocks: ["0.0.0.0/0"] }],
+    egress: [
+        {
+            fromPort: NETWORKING_CONSTANTS.PORTS.ALL,
+            toPort: NETWORKING_CONSTANTS.PORTS.ALL,
+            protocol: NETWORKING_CONSTANTS.PROTOCOLS.ALL,
+            cidrBlocks: ["0.0.0.0/0"],
+        },
+    ],
     tags: envConfig.tags,
 });
 
 const lambdaSg = new aws.ec2.SecurityGroup(`${appName}-dev-lambda-sg`, {
     description: "Lambda egress SG",
     vpcId: networking.vpc.id,
-    egress: [{ fromPort: 0, toPort: 0, protocol: "-1", cidrBlocks: ["0.0.0.0/0"] }],
+    egress: [
+        {
+            fromPort: NETWORKING_CONSTANTS.PORTS.ALL,
+            toPort: NETWORKING_CONSTANTS.PORTS.ALL,
+            protocol: NETWORKING_CONSTANTS.PROTOCOLS.ALL,
+            cidrBlocks: ["0.0.0.0/0"],
+        },
+    ],
     tags: envConfig.tags,
 });
 
@@ -58,101 +140,91 @@ const database = new Database(`${appName}-dev-db`, {
     subnetIds: networking.getPrivateSubnetIds(),
     securityGroupId: networking.vpc.defaultSecurityGroupId,
     allowedSecurityGroupIds: [apprunnerSg.id, lambdaSg.id],
-    dbName: `${appName.replace(/-/g, "_")}_dev`,
+    dbName: dbName,
     username: dbUsername,
     password: dbPassword,
-    instanceClass: "db.t3.micro", // Cost optimized for dev
-    allocatedStorage: 20,
-    maxAllocatedStorage: 50, // Lower limit for dev
+    instanceClass: DATABASE_CONSTANTS.INSTANCE_CLASSES.MICRO,
+    allocatedStorage: DATABASE_CONSTANTS.DEFAULT_STORAGE.DEV,
+    maxAllocatedStorage: DATABASE_CONSTANTS.MAX_STORAGE.DEV,
 });
 
-// Create App Runner service
-const appService = new AppRunnerService(`${appName}-dev-app`, {
-    name: appName,
-    environment: "dev",
-    repositoryUrl: repositoryUrl,
-    branch: config.get("branch") || "develop",
-    databaseUrl: database.getConnectionString(),
-    environmentVariables: {
-        API_BASE_URL: config.get("apiBaseUrl") || "",
-        LOG_LEVEL: "debug",
-        FEATURE_FLAGS: JSON.stringify({
-            enableNewFeature: false,
-            debugMode: true,
-        }),
+const databaseConnectionString = buildDatabaseConnectionString({
+    username: dbUsername,
+    password: dbPassword,
+    host: database.getAddress(),
+    port: database.getPort(),
+    database: dbName,
+});
+
+// Construct ECR image URI
+const ecrImageUri = pulumi
+    .all([currentAccount, currentRegion, appName])
+    .apply(([account, region, name]) => {
+        if (configuredEcrImageUri) {
+            return configuredEcrImageUri;
+        }
+        // Default to latest tag if not specified
+        return `${account.accountId}.dkr.ecr.${region.name}.amazonaws.com/${name}-dev:latest`;
+    });
+
+// Create App Runner service with ECR source
+const appService = new AppRunnerService(
+    `${appName}-dev-${APPLICATION_CONSTANTS.RESOURCE_TYPES.APP_RUNNER_SERVICE}`,
+    {
+        name: appName,
+        environment: "dev",
+
+        // ECR configuration
+        ecrImageUri: ecrImageUri,
+
+        // Application configuration
+        databaseUrl: databaseConnectionString,
+        environmentVariables: {
+            [APPLICATION_CONSTANTS.ENV_VARS.API_BASE_URL]:
+                config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.API_BASE_URL) || "",
+            [APPLICATION_CONSTANTS.ENV_VARS.LOG_LEVEL]: APPLICATION_CONSTANTS.LOG_LEVELS.DEBUG,
+            [APPLICATION_CONSTANTS.ENV_VARS.FEATURE_FLAGS]: JSON.stringify(FEATURE_FLAGS.DEV),
+        },
+
+        // Scaling configuration optimized for dev
+        maxConcurrency: APP_RUNNER_CONSTANTS.SCALING.DEV.MAX_CONCURRENCY,
+        maxSize: APP_RUNNER_CONSTANTS.SCALING.DEV.MAX_SIZE,
+        minSize: APP_RUNNER_CONSTANTS.SCALING.DEV.MIN_SIZE,
+        cpu: APP_RUNNER_CONSTANTS.CPU_OPTIONS.QUARTER,
+        memory: APP_RUNNER_CONSTANTS.MEMORY_OPTIONS.HALF_GB,
+
+        // VPC networking for private access to RDS
+        vpcSubnetIds: networking.getPrivateSubnetIds(),
+        vpcSecurityGroupIds: [apprunnerSg.id],
     },
-    maxConcurrency: 10, // Lower concurrency for dev
-    maxSize: 2, // Max 2 instances for dev
-    minSize: 0, // Scale to zero when not in use
-    cpu: "0.25 vCPU", // Minimum CPU for cost savings
-    memory: "0.5 GB", // Minimum memory for cost savings
-    // VPC networking for private access to RDS
-    vpcSubnetIds: networking.getPrivateSubnetIds(),
-    vpcSecurityGroupIds: [apprunnerSg.id],
-});
-
-// Create Lambda functions
-const lambdaGroup = new LambdaGroup(`${appName}-dev-lambdas`);
-
-// Example Lambda function - replace with your actual functions
-const exampleLambda = lambdaGroup.addFunction(`${appName}-dev-example`, {
-    name: `${appName}-example`,
-    environment: "dev",
-    runtime: "nodejs22.x",
-    handler: "index.handler",
-    code: new pulumi.asset.AssetArchive({
-        "index.js": new pulumi.asset.StringAsset(`
-            exports.handler = async (event) => {
-                console.log('Event:', JSON.stringify(event));
-                return {
-                    statusCode: 200,
-                    body: JSON.stringify({ message: 'Hello from Lambda!' })
-                };
-            };
-        `),
-    }),
-    environmentVariables: {
-        DATABASE_URL: database.getConnectionString(),
-        ENVIRONMENT: "dev",
+    {
+        dependsOn: placeholderSeedResource ? [placeholderSeedResource] : undefined,
     },
-    timeout: 30,
-    memorySize: 128, // Minimum for cost optimization
-    // VPC networking for private access to RDS
-    subnetIds: networking.getPrivateSubnetIds(),
-    securityGroupIds: [lambdaSg.id],
-    aliasName: lambdaAliasName,
-});
-
-// CI/CD pipeline to package and deploy the example Lambda from GitHub via CodeBuild/CodeDeploy
-const exampleLambdaPipeline = new LambdaCicdPipeline(`${appName}-dev-example-pipeline`, {
-    name: `${appName}-example`,
-    environment: "dev",
-    repositoryOwner: lambdaRepoOwner,
-    repositoryName: lambdaRepoName,
-    branch: lambdaRepoBranch,
-    connectionArn: lambdaConnectionArn,
-    lambdaFunctionName: exampleLambda.getFunctionName(),
-    lambdaAliasName: lambdaAliasName,
-});
+);
 
 // Create monitoring and alerting
-const monitoring = new Monitoring(`${appName}-dev-monitoring`, {
-    name: appName,
-    environment: "dev",
-    serviceName: appService.service.serviceName,
-    dbInstanceId: database.instance.identifier,
-    lambdaFunctionNames: [exampleLambda.getFunctionName()],
-    alertEmail: alertEmail,
-});
+const monitoring = new Monitoring(
+    `${appName}-dev-${APPLICATION_CONSTANTS.RESOURCE_TYPES.MONITORING}`,
+    {
+        name: appName,
+        environment: "dev",
+        serviceName: appService.service.serviceName,
+        dbInstanceId: database.instance.identifier,
+        lambdaFunctionNames: [],
+        alertEmail: alertEmail,
+        enableCostBudget: enableCostBudget ?? true,
+        enableCostAnomaly: enableCostAnomaly,
+    },
+);
 
 // Optional WAF
 let wafArn: pulumi.Output<string> | undefined = undefined;
 if (enableWaf) {
-    const waf = new AppWaf(`${appName}-dev`, {
+    const waf = new AppWaf(`${appName}-dev-${APPLICATION_CONSTANTS.RESOURCE_TYPES.WAF}`, {
         name: appName,
         environment: "dev",
         resourceArn: appService.getServiceArn(),
-        rateLimit: 1000,
+        rateLimit: WAF_CONSTANTS.RATE_LIMITS.DEV,
     });
     wafArn = waf.webAcl.arn;
 }
@@ -163,38 +235,42 @@ if (enableCloudFront) {
     const originDomain = appService
         .getServiceUrl()
         .apply((u) => u.replace(/^https?:\/\//, "").replace(/\/$/, ""));
-    const dist = new aws.cloudfront.Distribution(`${appName}-dev-cdn`, {
-        enabled: true,
-        isIpv6Enabled: true,
-        origins: [
-            {
-                domainName: originDomain,
-                originId: "apprunner-origin",
-                customOriginConfig: {
-                    httpPort: 80,
-                    httpsPort: 443,
-                    originProtocolPolicy: "https-only",
-                    originSslProtocols: ["TLSv1.2"],
+    const dist = new aws.cloudfront.Distribution(
+        `${appName}-dev-${APPLICATION_CONSTANTS.RESOURCE_TYPES.CLOUDFRONT}`,
+        {
+            enabled: true,
+            isIpv6Enabled: true,
+            origins: [
+                {
+                    domainName: originDomain,
+                    originId: "apprunner-origin",
+                    customOriginConfig: {
+                        httpPort: CLOUDFRONT_CONSTANTS.ORIGIN_CONFIG.HTTP_PORT,
+                        httpsPort: CLOUDFRONT_CONSTANTS.ORIGIN_CONFIG.HTTPS_PORT,
+                        originProtocolPolicy:
+                            CLOUDFRONT_CONSTANTS.ORIGIN_CONFIG.ORIGIN_PROTOCOL_POLICY,
+                        originSslProtocols: CLOUDFRONT_CONSTANTS.ORIGIN_CONFIG.ORIGIN_SSL_PROTOCOLS,
+                    },
                 },
+            ],
+            defaultCacheBehavior: {
+                targetOriginId: "apprunner-origin",
+                viewerProtocolPolicy: CLOUDFRONT_CONSTANTS.CACHE_BEHAVIOR.VIEWER_PROTOCOL_POLICY,
+                allowedMethods: CLOUDFRONT_CONSTANTS.CACHE_BEHAVIOR.ALLOWED_METHODS,
+                cachedMethods: CLOUDFRONT_CONSTANTS.CACHE_BEHAVIOR.CACHED_METHODS,
+                forwardedValues: {
+                    queryString: true,
+                    headers: ["*"],
+                    cookies: { forward: "all" },
+                },
+                compress: true,
             },
-        ],
-        defaultCacheBehavior: {
-            targetOriginId: "apprunner-origin",
-            viewerProtocolPolicy: "redirect-to-https",
-            allowedMethods: ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"],
-            cachedMethods: ["GET", "HEAD", "OPTIONS"],
-            forwardedValues: {
-                queryString: true,
-                headers: ["*"],
-                cookies: { forward: "all" },
-            },
-            compress: true,
+            priceClass: CLOUDFRONT_CONSTANTS.CACHE_BEHAVIOR.PRICE_CLASS,
+            restrictions: { geoRestriction: { restrictionType: "none" } },
+            viewerCertificate: { cloudfrontDefaultCertificate: true },
+            tags: envConfig.tags,
         },
-        priceClass: "PriceClass_All",
-        restrictions: { geoRestriction: { restrictionType: "none" } },
-        viewerCertificate: { cloudfrontDefaultCertificate: true },
-        tags: envConfig.tags,
-    });
+    );
     cloudFrontDomainName = dist.domainName;
 }
 
@@ -208,19 +284,17 @@ export const outputs = {
 
     // Database
     databaseEndpoint: database.getEndpoint(),
-    databaseConnectionString: database.getConnectionString(),
+    // Database connection string intentionally omitted from stack outputs to avoid leaking secrets
     dbSecurityGroupId: database.getSecurityGroupId(),
 
     // App Runner
     appServiceUrl: appService.getServiceUrl(),
     appServiceArn: appService.getServiceArn(),
-    connectionArn: appService.getConnectionArn(),
 
-    // Lambda
-    exampleLambdaArn: exampleLambda.getFunctionArn(),
-    exampleLambdaAliasArn: exampleLambda.alias?.arn,
-    lambdaPipelineName: exampleLambdaPipeline.codePipeline.name,
-    lambdaArtifactBucketName: exampleLambdaPipeline.artifactBucket.bucket,
+    // ECR and CI/CD
+    ecrRepositoryUrl: ecrRepository.getRepositoryUrl(),
+    ecrRepositoryArn: ecrRepository.getRepositoryArn(),
+    githubActionsRoleArn: githubActionsRole.getRoleArn(),
 
     // Monitoring
     dashboardUrl: monitoring.getDashboardUrl(),
@@ -230,7 +304,8 @@ export const outputs = {
 
     // Environment info
     environment: "dev",
-    region: aws.getRegion().then((r) => r.name),
+    region: currentRegion.then((r) => r.name),
+    accountId: currentAccount.then((a) => a.accountId),
     tags: envConfig.tags,
 };
 
@@ -239,3 +314,5 @@ export const vpcId = outputs.vpcId;
 export const databaseEndpoint = outputs.databaseEndpoint;
 export const appServiceUrl = outputs.appServiceUrl;
 export const dashboardUrl = outputs.dashboardUrl;
+export const ecrRepositoryUrl = outputs.ecrRepositoryUrl;
+export const githubActionsRoleArn = outputs.githubActionsRoleArn;

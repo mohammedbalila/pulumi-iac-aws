@@ -1,0 +1,219 @@
+name: Deploy Backend
+
+on:
+    push:
+        branches: [develop, main]
+    release:
+        types: [published]
+
+env:
+    AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-3' }}
+    NODE_VERSION: ${{ vars.NODE_VERSION || '22' }}
+    APP_NAME: ${{ vars.APP_NAME || 'api-service' }}
+
+permissions:
+    contents: read
+    id-token: write
+
+jobs:
+    deploy-dev:
+        name: Build and Deploy (dev)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        runs-on: ubuntu-latest
+        environment:
+            name: dev
+        env:
+            ECR_REPOSITORY: ${{ env.APP_NAME }}-dev
+            IMAGE_TAG: ${{ github.sha }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+
+            - name: Install dependencies and run tests (optional)
+              run: |
+                  if [ -f package.json ]; then
+                      npm ci
+                      npm test
+                  else
+                      echo "No package.json found; skipping Node-based tests."
+                  fi
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+                  aws-region: ${{ env.AWS_REGION }}
+
+            - name: Login to Amazon ECR
+              id: login-ecr
+              uses: aws-actions/amazon-ecr-login@v2
+
+            - name: Build and push image
+              id: build-and-push
+              env:
+                  ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              run: |
+                  docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+                  docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                  docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+                  docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                  echo "image-uri=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+            - name: Update App Runner service
+              env:
+                  IMAGE_URI: ${{ steps.build-and-push.outputs.image-uri }}
+              run: |
+                  SOURCE_CONFIG=$(jq -nc --arg image "$IMAGE_URI" '{ImageRepository:{ImageIdentifier:$image,ImageRepositoryType:"ECR"}}')
+                  aws apprunner update-service \
+                      --service-arn "${{ secrets.APP_RUNNER_SERVICE_ARN_DEV }}" \
+                      --source-configuration "$SOURCE_CONFIG"
+
+            - name: Record deployment
+              env:
+                  IMAGE_URI: ${{ steps.build-and-push.outputs.image-uri }}
+              run: echo "🚀 Deployed $IMAGE_URI to dev" >> $GITHUB_STEP_SUMMARY
+
+    deploy-staging:
+        name: Build and Deploy (staging)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        environment:
+            name: staging
+        env:
+            ECR_REPOSITORY: ${{ env.APP_NAME }}-staging
+            IMAGE_TAG: ${{ github.sha }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+
+            - name: Install dependencies and run tests (optional)
+              run: |
+                  if [ -f package.json ]; then
+                      npm ci
+                      npm test
+                  else
+                      echo "No package.json found; skipping Node-based tests."
+                  fi
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN_STAGING }}
+                  aws-region: ${{ env.AWS_REGION }}
+
+            - name: Login to Amazon ECR
+              id: login-ecr
+              uses: aws-actions/amazon-ecr-login@v2
+
+            - name: Build and push image
+              id: build-and-push
+              env:
+                  ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              run: |
+                  docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+                  docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                  docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+                  docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                  echo "image-uri=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+            - name: Update App Runner service
+              env:
+                  IMAGE_URI: ${{ steps.build-and-push.outputs.image-uri }}
+              run: |
+                  SOURCE_CONFIG=$(jq -nc --arg image "$IMAGE_URI" '{ImageRepository:{ImageIdentifier:$image,ImageRepositoryType:"ECR"}}')
+                  aws apprunner update-service \
+                      --service-arn "${{ secrets.APP_RUNNER_SERVICE_ARN_STAGING }}" \
+                      --source-configuration "$SOURCE_CONFIG"
+
+            - name: Record deployment
+              env:
+                  IMAGE_URI: ${{ steps.build-and-push.outputs.image-uri }}
+              run: echo "🚀 Deployed $IMAGE_URI to staging" >> $GITHUB_STEP_SUMMARY
+
+    deploy-prod:
+        name: Build and Deploy (prod)
+        if: github.event_name == 'release' && github.event.action == 'published'
+        runs-on: ubuntu-latest
+        environment:
+            name: production
+        env:
+            ECR_REPOSITORY: ${{ env.APP_NAME }}-prod
+            IMAGE_TAG: ${{ github.event.release.tag_name }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+
+            - name: Install dependencies and run tests (optional)
+              run: |
+                  if [ -f package.json ]; then
+                      npm ci
+                      npm test
+                  else
+                      echo "No package.json found; skipping Node-based tests."
+                  fi
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+                  aws-region: ${{ env.AWS_REGION }}
+
+            - name: Login to Amazon ECR
+              id: login-ecr
+              uses: aws-actions/amazon-ecr-login@v2
+
+            - name: Build and push image
+              id: build-and-push
+              env:
+                  ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              run: |
+                  docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+                  docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                  docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+                  docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                  echo "image-uri=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+            - name: Await production approval
+              uses: trstringer/manual-approval@v1
+              with:
+                  approvers: ${{ secrets.PROD_APPROVERS }}
+                  minimum-approvals: 2
+                  secret: ${{ secrets.GITHUB_TOKEN }}
+                  issue-title: "Production deployment approval"
+                  issue-body: |
+                      Release: ${{ github.event.release.tag_name }}
+                      Commit: ${{ github.event.release.target_commitish }}
+
+                      Please approve to promote this image to production.
+
+            - name: Update App Runner service
+              env:
+                  IMAGE_URI: ${{ steps.build-and-push.outputs.image-uri }}
+              run: |
+                  SOURCE_CONFIG=$(jq -nc --arg image "$IMAGE_URI" '{ImageRepository:{ImageIdentifier:$image,ImageRepositoryType:"ECR"}}')
+                  aws apprunner update-service \
+                      --service-arn "${{ secrets.APP_RUNNER_SERVICE_ARN_PROD }}" \
+                      --source-configuration "$SOURCE_CONFIG"
+
+            - name: Record deployment
+              env:
+                  IMAGE_URI: ${{ steps.build-and-push.outputs.image-uri }}
+              run: echo "🚀 Deployed $IMAGE_URI to production" >> $GITHUB_STEP_SUMMARY

@@ -19,6 +19,17 @@ export class FckNat extends pulumi.ComponentResource {
         super("custom:networking:FckNat", name, {}, opts);
 
         const tags = commonTags(args.environment);
+        const vpcCidrBlock = pulumi
+            .output(args.vpcId)
+            .apply((vpcId) => aws.ec2.getVpc({ id: vpcId }))
+            .apply((vpc) => {
+                if (!vpc.cidrBlock) {
+                    throw new pulumi.RunError(
+                        "Unable to resolve CIDR block for the supplied VPC. Ensure the VPC exists before creating fck-nat.",
+                    );
+                }
+                return vpc.cidrBlock;
+            });
 
         // Create security group for fck-nat instances
         this.securityGroup = new aws.ec2.SecurityGroup(
@@ -45,7 +56,7 @@ export class FckNat extends pulumi.ComponentResource {
                         fromPort: 0,
                         toPort: 0,
                         protocol: "-1",
-                        cidrBlocks: ["10.0.0.0/16"], // Adjust based on your VPC CIDR
+                        cidrBlocks: vpcCidrBlock.apply((cidr) => [cidr]),
                         description: "Allow traffic from private subnets",
                     },
                 ],
@@ -65,13 +76,23 @@ export class FckNat extends pulumi.ComponentResource {
             filters: [
                 {
                     name: "name",
-                    values: ["fck-nat-amzn2-*"],
+                    values: ["fck-nat-al2023-*"],
                 },
                 {
                     name: "architecture",
-                    values: ["arm64"], // Use ARM for better cost/performance
+                    values: ["arm64"],
                 },
             ],
+        });
+
+        // Pick an instance type that matches the published AMI architecture. Some regions only
+        // publish x86_64 images, so we fall back to t3a.* when arm64 is unavailable.
+        const instanceType = fckNatAmi.architecture.apply((architecture) => {
+            const prefersArm = architecture === "arm64" || architecture === "aarch64";
+            if (prefersArm) {
+                return args.environment === "prod" ? "t4g.small" : "t4g.nano";
+            }
+            return args.environment === "prod" ? "t3a.small" : "t3a.nano";
         });
 
         // Create IAM role for fck-nat instances
@@ -142,82 +163,74 @@ export class FckNat extends pulumi.ComponentResource {
             { parent: this },
         );
 
-        // Create fck-nat instances (one per AZ for HA)
-        this.instances = [];
-        this.routeTables = [];
+        // Create fck-nat instances (one per AZ for HA) using deterministic arrays
+        if (args.publicSubnetIds.length !== args.privateSubnetIds.length) {
+            throw new pulumi.RunError(
+                "publicSubnetIds and privateSubnetIds must have the same length for fck-nat.",
+            );
+        }
 
-        const publicSubnetIds = pulumi.output(args.publicSubnetIds);
-        const privateSubnetIds = pulumi.output(args.privateSubnetIds);
+        const userDataScript = pulumi.interpolate`${[
+            "#!/bin/bash",
+            "# fck-nat configuration will be handled by the AMI",
+            "# The instance will automatically configure itself as a NAT",
+            "echo \"fck-nat instance starting up\"",
+        ].join("\n")}`;
 
-        publicSubnetIds.apply((pubSubnets) => {
-            privateSubnetIds.apply((privSubnets) => {
-                for (let i = 0; i < pubSubnets.length; i++) {
-                    // Create fck-nat instance
-                    const instance = new aws.ec2.Instance(
-                        `${args.name}-fck-nat-${i}`,
-                        {
-                            ami: fckNatAmi.id,
-                            instanceType: args.environment === "prod" ? "t4g.small" : "t4g.nano", // ARM instances
-                            subnetId: pubSubnets[i],
-                            vpcSecurityGroupIds: [this.securityGroup.id],
-                            iamInstanceProfile: instanceProfile.name,
-                            sourceDestCheck: false, // Critical for NAT functionality
+        this.instances = args.publicSubnetIds.map((publicSubnetId, index) =>
+            new aws.ec2.Instance(
+                `${args.name}-fck-nat-${index}`,
+                {
+                    ami: fckNatAmi.id,
+                    instanceType: instanceType,
+                    subnetId: publicSubnetId,
+                    vpcSecurityGroupIds: [this.securityGroup.id],
+                    iamInstanceProfile: instanceProfile.name,
+                    sourceDestCheck: false, // Critical for NAT functionality
+                    userData: userDataScript,
+                    tags: {
+                        ...tags,
+                        Name: `${args.name}-fck-nat-${index}`,
+                        "fck-nat:zone": `${index}`,
+                    },
+                },
+                { parent: this },
+            ),
+        );
 
-                            // User data for fck-nat configuration
-                            userData: pulumi.interpolate`#!/bin/bash
-# fck-nat configuration will be handled by the AMI
-# The instance will automatically configure itself as a NAT
-echo "fck-nat instance starting up"
-`,
+        this.routeTables = args.privateSubnetIds.map((privateSubnetId, index) => {
+            const routeTable = new aws.ec2.RouteTable(
+                `${args.name}-private-rt-${index}`,
+                {
+                    vpcId: args.vpcId,
+                    tags: {
+                        ...tags,
+                        Name: `${args.name}-private-rt-${index}`,
+                    },
+                },
+                { parent: this },
+            );
 
-                            tags: {
-                                ...tags,
-                                Name: `${args.name}-fck-nat-${i}`,
-                                "fck-nat:zone": `${i}`,
-                            },
-                        },
-                        { parent: this },
-                    );
+            new aws.ec2.Route(
+                `${args.name}-private-route-${index}`,
+                {
+                    routeTableId: routeTable.id,
+                    destinationCidrBlock: "0.0.0.0/0",
+                    networkInterfaceId: this.instances[index].primaryNetworkInterfaceId,
+                },
+                { parent: this },
+            );
 
-                    this.instances.push(instance);
+            new aws.ec2.RouteTableAssociation(
+                `${args.name}-private-rta-${index}`,
+                {
+                    subnetId: privateSubnetId,
+                    routeTableId: routeTable.id,
+                },
+                { parent: this },
+            );
 
-                    // Create route table for this AZ's private subnet
-                    const routeTable = new aws.ec2.RouteTable(
-                        `${args.name}-private-rt-${i}`,
-                        {
-                            vpcId: args.vpcId,
-                            tags: {
-                                ...tags,
-                                Name: `${args.name}-private-rt-${i}`,
-                            },
-                        },
-                        { parent: this },
-                    );
-
-                    // Route to fck-nat instance
-                    new aws.ec2.Route(
-                        `${args.name}-private-route-${i}`,
-                        {
-                            routeTableId: routeTable.id,
-                            destinationCidrBlock: "0.0.0.0/0",
-                            networkInterfaceId: instance.primaryNetworkInterfaceId,
-                        },
-                        { parent: this },
-                    );
-
-                    // Associate with private subnet
-                    new aws.ec2.RouteTableAssociation(
-                        `${args.name}-private-rta-${i}`,
-                        {
-                            subnetId: privSubnets[i],
-                            routeTableId: routeTable.id,
-                        },
-                        { parent: this },
-                    );
-
-                    this.routeTables.push(routeTable);
-                }
-            });
+            return routeTable;
         });
 
         // Register outputs

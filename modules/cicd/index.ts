@@ -163,8 +163,12 @@ export class LambdaCicdPipeline extends pulumi.ComponentResource {
             ? args.buildSpec
             : pulumi
                   .all([args.lambdaFunctionName, args.lambdaAliasName])
-                  .apply(([functionName, aliasName]) =>
-                      [
+                  .apply(([functionName, aliasName]) => {
+                      const appSpecContent = aliasName
+                          ? `version: 0.0\\nResources:\\n  - lambdaFunction:\\n      Type: AWS::Lambda::Function\\n      Properties:\\n        Name: ${functionName}\\n        Alias: ${aliasName}\\n`
+                          : `version: 0.0\\nResources:\\n  - lambdaFunction:\\n      Type: AWS::Lambda::Function\\n      Properties:\\n        Name: ${functionName}\\n`;
+
+                      return [
                           "version: 0.2",
                           "phases:",
                           "  install:",
@@ -175,13 +179,13 @@ export class LambdaCicdPipeline extends pulumi.ComponentResource {
                           "      - npm install",
                           "      - npm run build --if-present",
                           "      - zip -r lambda.zip .",
-                          `      - printf 'version: 0.0\\nResources:\\n  - lambdaFunction:\\n      Type: AWS::Lambda::Function\\n      Properties:\\n        Name: ${functionName}\\n        Alias: ${aliasName}\\n' > appspec.yml`,
+                          `      - printf '${appSpecContent}' > appspec.yml`,
                           "artifacts:",
                           "  files:",
                           "    - lambda.zip",
                           "    - appspec.yml",
-                      ].join("\n"),
-                  );
+                      ].join("\n");
+                  });
 
         this.codeBuildProject = new aws.codebuild.Project(
             `${name}-build`,
@@ -200,10 +204,14 @@ export class LambdaCicdPipeline extends pulumi.ComponentResource {
                             name: "LAMBDA_FUNCTION_NAME",
                             value: args.lambdaFunctionName,
                         },
-                        {
-                            name: "LAMBDA_ALIAS_NAME",
-                            value: args.lambdaAliasName,
-                        },
+                        ...(args.lambdaAliasName
+                            ? [
+                                  {
+                                      name: "LAMBDA_ALIAS_NAME",
+                                      value: args.lambdaAliasName,
+                                  },
+                              ]
+                            : []),
                     ],
                 },
                 source: {

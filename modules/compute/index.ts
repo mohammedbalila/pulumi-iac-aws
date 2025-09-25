@@ -1,13 +1,103 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
+import * as crypto from "crypto";
 import { AppRunnerArgs } from "../../shared/types";
 import { commonTags } from "../../shared/config";
+
+const MIN_NAME_LENGTH = 4;
+const DEFAULT_BASE_SEGMENT = "apprunner";
+const FALLBACK_SEGMENT = "app0";
+
+const sanitizeSegment = (value: string) =>
+    value
+        .replace(/[^A-Za-z0-9-_]/g, "-")
+        .replace(/[-_]{2,}/g, "-")
+        .replace(/^-+/, "")
+        .replace(/-+$/, "");
+
+const ensureValidStart = (value: string) => {
+    const trimmed = value.replace(/^[^A-Za-z0-9]+/, "");
+    return trimmed || FALLBACK_SEGMENT;
+};
+
+const shrinkWithHash = (value: string, maxLength: number) => {
+    if (value.length <= maxLength) {
+        return value;
+    }
+
+    if (maxLength <= MIN_NAME_LENGTH) {
+        return value.slice(0, maxLength);
+    }
+
+    const hashLength = Math.min(6, Math.max(2, maxLength - 2));
+    const prefixLength = Math.max(1, maxLength - hashLength - 1);
+    const hash = crypto.createHash("sha1").update(value).digest("hex").slice(0, hashLength);
+    const prefix = value.slice(0, prefixLength).replace(/-+$/, "");
+    const safePrefix = prefix || FALLBACK_SEGMENT.slice(0, prefixLength);
+    const combined = `${safePrefix}-${hash}`;
+    return combined.length > maxLength ? combined.slice(0, maxLength) : combined;
+};
+
+const buildName = (base: string, suffix: string, maxLength: number) => {
+    const baseSegment = ensureValidStart(sanitizeSegment(base) || DEFAULT_BASE_SEGMENT);
+    const suffixSegment = sanitizeSegment(suffix);
+
+    let normalizedBase = baseSegment;
+    let normalizedSuffix = suffixSegment;
+
+    const hasSuffix = normalizedSuffix.length > 0;
+
+    if (hasSuffix) {
+        let baseBudget = maxLength - normalizedSuffix.length - 1;
+
+        if (baseBudget < MIN_NAME_LENGTH) {
+            const suffixAllowance = Math.max(0, maxLength - MIN_NAME_LENGTH - 1);
+            if (suffixAllowance <= 0) {
+                normalizedSuffix = "";
+                baseBudget = maxLength;
+            } else {
+                normalizedSuffix = normalizedSuffix.slice(-suffixAllowance);
+                baseBudget = MIN_NAME_LENGTH;
+            }
+        }
+
+        normalizedBase = shrinkWithHash(normalizedBase, baseBudget);
+
+        const availableForSuffix = maxLength - normalizedBase.length - 1;
+        if (availableForSuffix <= 0) {
+            normalizedSuffix = "";
+        } else if (normalizedSuffix.length > availableForSuffix) {
+            normalizedSuffix = normalizedSuffix.slice(-availableForSuffix);
+        }
+    } else {
+        normalizedBase = shrinkWithHash(normalizedBase, maxLength);
+    }
+
+    let combined =
+        normalizedSuffix && normalizedSuffix.length > 0
+            ? `${normalizedBase}-${normalizedSuffix}`
+            : normalizedBase;
+
+    combined = sanitizeSegment(combined);
+    combined = ensureValidStart(combined);
+
+    if (combined.length > maxLength) {
+        combined = combined.slice(0, maxLength).replace(/-+$/, "");
+        combined = ensureValidStart(combined);
+    }
+
+    if (combined.length < MIN_NAME_LENGTH) {
+        combined = (combined + "0000").slice(0, MIN_NAME_LENGTH);
+    }
+
+    return combined;
+};
 
 export class AppRunnerService extends pulumi.ComponentResource {
     public service: aws.apprunner.Service;
     public serviceUrl: pulumi.Output<string>;
     public autoScalingConfig: aws.apprunner.AutoScalingConfigurationVersion;
-    public connectionArn: pulumi.Output<string>;
+    // Removed connectionArn field - ECR-based deployment only
     public vpcConnector?: aws.apprunner.VpcConnector;
     private args: AppRunnerArgs;
 
@@ -17,29 +107,26 @@ export class AppRunnerService extends pulumi.ComponentResource {
         this.args = args;
         const tags = commonTags(args.environment);
 
-        // Create GitHub connection for source code access
-        const connection = new aws.apprunner.Connection(
-            `${args.name}-github-connection`,
-            {
-                connectionName: `${args.name}-github-connection`,
-                providerType: "GITHUB",
-                tags: tags,
-            },
-            { parent: this },
-        );
+        // Validate source configuration - ECR image URI is required
+        if (!args.ecrImageUri) {
+            throw new pulumi.RunError(
+                "App Runner services require ECR image URI for source configuration.",
+            );
+        }
 
-        this.connectionArn = connection.arn;
+        // ECR-based deployment only
 
         // Create auto-scaling configuration
+        const autoScalingName = buildName(args.name, `autoscaling-${args.environment}`, 32);
         this.autoScalingConfig = new aws.apprunner.AutoScalingConfigurationVersion(
             `${args.name}-autoscaling`,
             {
-                autoScalingConfigurationName: `${args.name}-autoscaling-${args.environment}`,
+                autoScalingConfigurationName: autoScalingName,
 
                 // Cost optimization: Conservative scaling settings
                 maxConcurrency: args.maxConcurrency || 25, // Requests per instance
                 maxSize: args.maxSize || (args.environment === "prod" ? 5 : 2), // Max instances
-                minSize: args.minSize || (args.environment === "prod" ? 1 : 0), // Min instances (0 for dev)
+                minSize: args.minSize ?? (args.environment === "prod" ? 2 : 0), // Scale to zero outside prod
 
                 tags: tags,
             },
@@ -58,10 +145,11 @@ export class AppRunnerService extends pulumi.ComponentResource {
             args.vpcSecurityGroupIds &&
             args.vpcSecurityGroupIds.length > 0
         ) {
+            const vpcConnectorName = buildName(args.name, `vpc-connector-${args.environment}`, 32);
             this.vpcConnector = new aws.apprunner.VpcConnector(
                 `${args.name}-vpc-connector`,
                 {
-                    vpcConnectorName: `${args.name}-vpc-connector-${args.environment}`,
+                    vpcConnectorName: vpcConnectorName,
                     subnets: args.vpcSubnetIds,
                     securityGroups: args.vpcSecurityGroupIds,
                     tags,
@@ -72,38 +160,13 @@ export class AppRunnerService extends pulumi.ComponentResource {
         }
 
         // Create App Runner service
+        const serviceName = buildName(args.name, `service-${args.environment}`, 40);
         this.service = new aws.apprunner.Service(
             `${args.name}-service`,
             {
-                serviceName: `${args.name}-service-${args.environment}`,
+                serviceName: serviceName,
 
-                sourceConfiguration: {
-                    autoDeploymentsEnabled: true,
-                    authenticationConfiguration: {
-                        connectionArn: connection.arn,
-                    },
-                    codeRepository: {
-                        repositoryUrl: args.repositoryUrl,
-                        sourceCodeVersion: {
-                            type: "BRANCH",
-                            value: args.branch || "main",
-                        },
-                        codeConfiguration: {
-                            configurationSource: "API", // Use Pulumi config instead of apprunner.yaml
-                            codeConfigurationValues: {
-                                runtime: "NODEJS_22", // Adjust based on your application
-                                buildCommand: "npm ci && npm run build",
-                                startCommand: "npm start",
-                                runtimeEnvironmentVariables: {
-                                    NODE_ENV: args.environment,
-                                    DATABASE_URL: args.databaseUrl,
-                                    PORT: "8080", // App Runner default port
-                                    ...args.environmentVariables,
-                                },
-                            },
-                        },
-                    },
-                },
+                sourceConfiguration: this.createSourceConfiguration(),
 
                 autoScalingConfigurationArn: this.autoScalingConfig.arn,
 
@@ -155,7 +218,7 @@ export class AppRunnerService extends pulumi.ComponentResource {
             },
             {
                 parent: this,
-                dependsOn: [connection], // Ensure connection is created first
+                dependsOn: [], // Ensure connection is created first
             },
         );
 
@@ -166,7 +229,6 @@ export class AppRunnerService extends pulumi.ComponentResource {
             serviceArn: this.service.arn,
             serviceUrl: this.serviceUrl,
             serviceName: this.service.serviceName,
-            connectionArn: this.connectionArn,
             vpcConnectorArn: this.vpcConnector?.arn,
         });
     }
@@ -233,19 +295,21 @@ export class AppRunnerService extends pulumi.ComponentResource {
             const ssmPolicy = new aws.iam.Policy(
                 `${this.getName()}-apprunner-ssm-read`,
                 {
-                    policy: pulumi.all([paramArns, kmsArn]).apply(([arns, k]) =>
-                        JSON.stringify({
-                            Version: "2012-10-17",
-                            Statement: [
-                                {
-                                    Effect: "Allow",
-                                    Action: ["ssm:GetParameter", "ssm:GetParameters"],
-                                    Resource: arns,
-                                },
-                                { Effect: "Allow", Action: ["kms:Decrypt"], Resource: k },
-                            ],
-                        }),
-                    ),
+                    policy: pulumi
+                        .all([pulumi.all(paramArns), kmsArn])
+                        .apply(([arns, k]) =>
+                            JSON.stringify({
+                                Version: "2012-10-17",
+                                Statement: [
+                                    {
+                                        Effect: "Allow",
+                                        Action: ["ssm:GetParameter", "ssm:GetParameters"],
+                                        Resource: arns,
+                                    },
+                                    { Effect: "Allow", Action: ["kms:Decrypt"], Resource: k },
+                                ],
+                            }),
+                        ),
                 },
                 { parent: this },
             );
@@ -261,6 +325,66 @@ export class AppRunnerService extends pulumi.ComponentResource {
         }
 
         return role;
+    }
+
+    private createAccessRole(): aws.iam.Role {
+        // Create IAM role for App Runner to access ECR
+        const accessRole = new aws.iam.Role(
+            `${this.getName()}-access-role`,
+            {
+                assumeRolePolicy: JSON.stringify({
+                    Version: "2012-10-17",
+                    Statement: [
+                        {
+                            Action: "sts:AssumeRole",
+                            Effect: "Allow",
+                            Principal: {
+                                Service: "build.apprunner.amazonaws.com",
+                            },
+                        },
+                    ],
+                }),
+                tags: commonTags("shared"),
+            },
+            { parent: this },
+        );
+
+        // Attach the AWS-managed policy for ECR access
+        new aws.iam.RolePolicyAttachment(
+            `${this.getName()}-ecr-access-policy`,
+            {
+                role: accessRole.name,
+                policyArn:
+                    "arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess",
+            },
+            { parent: this },
+        );
+
+        return accessRole;
+    }
+
+    private createSourceConfiguration(): any {
+        // ECR-based deployment only
+        return {
+            autoDeploymentsEnabled: false, // Manual deployments via CI/CD
+            authenticationConfiguration: {
+                accessRoleArn: this.createAccessRole().arn,
+            },
+            imageRepository: {
+                imageIdentifier: this.args.ecrImageUri,
+                imageConfiguration: {
+                    port: "8080", // App Runner default port
+                    runtimeEnvironmentVariables: {
+                        NODE_ENV: this.args.environment,
+                        DATABASE_URL: this.args.databaseUrl,
+                        PORT: "8080",
+                        ...this.args.environmentVariables,
+                    },
+                    startCommand: this.args.startCommand || "npm start",
+                },
+                imageRepositoryType: "ECR",
+            },
+        };
     }
 
     private createObservabilityConfig(): aws.apprunner.ObservabilityConfiguration {
@@ -286,9 +410,7 @@ export class AppRunnerService extends pulumi.ComponentResource {
         return this.service.arn;
     }
 
-    public getConnectionArn(): pulumi.Output<string> {
-        return this.connectionArn;
-    }
+    // Removed getConnectionArn() as GitHub integration is no longer supported
 
     private getName(): string {
         return pulumi.getStack();

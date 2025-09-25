@@ -5,7 +5,7 @@ import { Database } from "../modules/database";
 
 describe("Database", () => {
     it("restricts ingress to allowed SGs when provided", async () => {
-        await withPulumiMocks(async () => {
+        await withPulumiMocks(async (_mocks) => {
             const allowed = [pulumi.output("sg-a"), pulumi.output("sg-b")];
             const db = new Database("db-dev", {
                 name: "app",

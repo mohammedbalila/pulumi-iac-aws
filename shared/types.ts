@@ -32,8 +32,9 @@ export interface DatabaseArgs {
 export interface AppRunnerArgs {
     name: string;
     environment: string;
-    repositoryUrl: string;
-    branch?: string;
+    // ECR source configuration (required for CI/CD)
+    ecrImageUri: pulumi.Input<string>;
+    // Application configuration
     databaseUrl: pulumi.Input<string>;
     environmentVariables?: Record<string, pulumi.Input<string>>;
     maxConcurrency?: number;
@@ -41,11 +42,33 @@ export interface AppRunnerArgs {
     minSize?: number;
     cpu?: string;
     memory?: string;
+    // Start command for container
+    startCommand?: string;
     // Optional VPC networking for private access (e.g., RDS)
     vpcSubnetIds?: pulumi.Input<string>[];
     vpcSecurityGroupIds?: pulumi.Input<string>[];
     // Optional: SSM parameter prefixes to allow read access for runtime secrets
     ssmParameterPaths?: pulumi.Input<string>[];
+}
+
+export interface ECRArgs {
+    name: string;
+    environment: string;
+    imageMutability?: "MUTABLE" | "IMMUTABLE";
+    scanOnPush?: boolean;
+    lifecyclePolicyText?: string;
+    retentionDays?: number;
+    seedWithPlaceholderImage?: boolean;
+    placeholderImageTag?: string;
+}
+
+export interface ECRConfig {
+    repositoryName: string;
+    imageTagMutability?: "MUTABLE" | "IMMUTABLE";
+    scanOnPush?: boolean;
+    maxImages?: number;
+    untaggedImageRetentionDays?: number;
+    allowedAccounts?: string[];
 }
 
 export interface LambdaArgs {
@@ -65,6 +88,7 @@ export interface LambdaArgs {
     // Optional alias configuration for traffic shifting / deployments
     aliasName?: string;
     publish?: boolean;
+    reservedConcurrentExecutions?: number;
 }
 
 export interface LambdaCicdPipelineArgs {
@@ -75,7 +99,7 @@ export interface LambdaCicdPipelineArgs {
     branch?: string;
     connectionArn: pulumi.Input<string>;
     lambdaFunctionName: pulumi.Input<string>;
-    lambdaAliasName: pulumi.Input<string>;
+    lambdaAliasName?: pulumi.Input<string>;
     artifactBucketName?: string;
     buildImage?: string;
     buildSpec?: pulumi.Input<string>;
@@ -88,4 +112,6 @@ export interface MonitoringArgs {
     dbInstanceId?: pulumi.Input<string>;
     lambdaFunctionNames?: pulumi.Input<string>[];
     alertEmail?: string;
+    enableCostBudget?: boolean;
+    enableCostAnomaly?: boolean;
 }

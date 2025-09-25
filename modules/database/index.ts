@@ -7,12 +7,22 @@ export class Database extends pulumi.ComponentResource {
     public instance: aws.rds.Instance;
     public subnetGroup: aws.rds.SubnetGroup;
     public securityGroup: aws.ec2.SecurityGroup;
-    public connectionString: pulumi.Output<string>;
 
     constructor(name: string, args: DatabaseArgs, opts?: pulumi.ComponentResourceOptions) {
         super("custom:database:Database", name, {}, opts);
 
         const tags = commonTags(args.environment);
+
+        const vpcId = pulumi.all(args.subnetIds).apply(async (subnetIds) => {
+            if (!subnetIds || subnetIds.length === 0) {
+                throw new Error("subnetIds must include at least one subnet for the database");
+            }
+            const subnet = await aws.ec2.getSubnet({ id: subnetIds[0] });
+            if (!subnet.vpcId) {
+                throw new Error(`Unable to resolve VPC for subnet ${subnetIds[0]}`);
+            }
+            return subnet.vpcId;
+        });
 
         // Create DB subnet group
         this.subnetGroup = new aws.rds.SubnetGroup(
@@ -32,6 +42,7 @@ export class Database extends pulumi.ComponentResource {
             `${args.name}-db-sg`,
             {
                 description: `Security group for ${args.name} RDS instance`,
+                vpcId: vpcId,
                 ingress:
                     args.allowedSecurityGroupIds && args.allowedSecurityGroupIds.length > 0
                         ? args.allowedSecurityGroupIds.map((sgId, idx) => ({
@@ -86,7 +97,7 @@ export class Database extends pulumi.ComponentResource {
 
                 // Engine configuration
                 engine: "postgres",
-                engineVersion: "15.4",
+                engineVersion: "17.6",
                 instanceClass: instanceClass,
 
                 // Database configuration
@@ -110,7 +121,9 @@ export class Database extends pulumi.ComponentResource {
                 performanceInsightsEnabled: isProduction,
                 performanceInsightsRetentionPeriod: isProduction ? 7 : undefined,
                 monitoringInterval: isProduction ? 60 : 0, // Enhanced monitoring for prod
-                monitoringRoleArn: isProduction ? this.createMonitoringRole().arn : undefined,
+                monitoringRoleArn: isProduction
+                    ? this.createMonitoringRole(args.name, args.environment).arn
+                    : undefined,
 
                 // Deletion protection and snapshots
                 deletionProtection: isProduction,
@@ -131,21 +144,21 @@ export class Database extends pulumi.ComponentResource {
             { parent: this },
         );
 
-        // Create connection string output
-        this.connectionString = pulumi.interpolate`postgresql://${args.username}:${args.password}@${this.instance.endpoint}/${args.dbName}`;
-
         // Register outputs
         this.registerOutputs({
             instanceId: this.instance.id,
             endpoint: this.instance.endpoint,
-            connectionString: this.connectionString,
         });
     }
 
-    private createMonitoringRole(): aws.iam.Role {
+    private createMonitoringRole(name: string, environment: string): aws.iam.Role {
+        const baseName = `${name}-${environment}-enhanced-monitoring`;
+        const roleName = baseName.length > 64 ? baseName.slice(0, 64) : baseName;
+
         const role = new aws.iam.Role(
-            `enhanced-monitoring-role`,
+            `${name}-${environment}-enhanced-monitoring-role`,
             {
+                name: roleName,
                 assumeRolePolicy: JSON.stringify({
                     Version: "2012-10-17",
                     Statement: [
@@ -175,32 +188,44 @@ export class Database extends pulumi.ComponentResource {
     }
 
     private createParameterGroup(name: string, environment: string): aws.rds.ParameterGroup {
+        const staticParameters = new Set(["shared_preload_libraries"]);
+        const parameters: aws.types.input.rds.ParameterGroupParameter[] = [
+            {
+                name: "shared_preload_libraries",
+                value: "pg_stat_statements",
+                applyMethod: "pending-reboot",
+            },
+            {
+                name: "log_statement",
+                value: environment === "prod" ? "none" : "all",
+                applyMethod: "immediate",
+            },
+            {
+                name: "log_min_duration_statement",
+                value: "1000",
+                applyMethod: "immediate",
+            },
+            {
+                name: "max_connections",
+                value: environment === "prod" ? "200" : "100",
+                applyMethod: "pending-reboot",
+            },
+        ].map((param) => ({
+            ...param,
+            applyMethod:
+                param.applyMethod ||
+                (staticParameters.has(param.name) ? "pending-reboot" : "immediate"),
+        }));
+
         const parameterGroup = new aws.rds.ParameterGroup(
             `${name}-postgres-params`,
             {
                 name: `${name}-postgres-params-${environment}`,
-                family: "postgres15",
+                family: "postgres17",
                 description: `PostgreSQL 15 parameter group for ${name}-${environment}`,
 
                 // Performance optimization parameters
-                parameters: [
-                    {
-                        name: "shared_preload_libraries",
-                        value: "pg_stat_statements",
-                    },
-                    {
-                        name: "log_statement",
-                        value: environment === "prod" ? "none" : "all",
-                    },
-                    {
-                        name: "log_min_duration_statement",
-                        value: "1000", // Log queries taking more than 1 second
-                    },
-                    {
-                        name: "max_connections",
-                        value: environment === "prod" ? "200" : "100",
-                    },
-                ],
+                parameters,
 
                 tags: commonTags(environment),
             },
@@ -210,13 +235,16 @@ export class Database extends pulumi.ComponentResource {
         return parameterGroup;
     }
 
-    // Helper methods
-    public getConnectionString(): pulumi.Output<string> {
-        return this.connectionString;
-    }
-
     public getEndpoint(): pulumi.Output<string> {
         return this.instance.endpoint;
+    }
+
+    public getAddress(): pulumi.Output<string> {
+        return this.instance.address;
+    }
+
+    public getPort(): pulumi.Output<number> {
+        return this.instance.port;
     }
 
     public getSecurityGroupId(): pulumi.Output<string> {

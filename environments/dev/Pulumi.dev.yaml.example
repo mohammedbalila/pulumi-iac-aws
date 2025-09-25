@@ -1,0 +1,32 @@
+config:
+  aws:region: eu-west-3
+  aws:profile: default # UPDATE: use your AWS profile with deployment permissions
+
+  # Application configuration
+  pulumi-aws-infrastructure:appName: your-app-name
+  pulumi-aws-infrastructure:githubOrg: your-github-org
+  pulumi-aws-infrastructure:githubRepo: your-service-repo
+  pulumi-aws-infrastructure:branch: develop
+
+  # Database configuration
+  pulumi-aws-infrastructure:dbUsername: postgres
+  pulumi-aws-infrastructure:dbPassword:
+    secure: <set-with-pulumi-config-set-secret>
+
+  # Monitoring configuration
+  pulumi-aws-infrastructure:alertEmail: your-email@example.com
+  pulumi-aws-infrastructure:enableCostBudget: "true"
+  pulumi-aws-infrastructure:enableCostAnomaly: "false"
+
+  # Cost center for billing
+  pulumi-aws-infrastructure:costCenter: development
+
+  # App Runner seed image (optional)
+  pulumi-aws-infrastructure:ecrImageUri: <optional-placeholder-image>
+
+  # Networking configuration
+  pulumi-aws-infrastructure:useFckNat: "true"
+  pulumi-aws-infrastructure:enableWaf: "false"
+
+  # GitHub Actions role configuration helpers
+  pulumi-aws-infrastructure:githubBranches: '["main"]'

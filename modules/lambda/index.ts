@@ -90,7 +90,8 @@ export class LambdaFunction extends pulumi.ComponentResource {
                 const kmsArn = pulumi
                     .all([acct, region])
                     .apply(([a, r]) => `arn:aws:kms:${r.name}:${a.accountId}:alias/aws/ssm`);
-                return pulumi.all([paramArns, kmsArn]).apply(([arns, k]) => ({
+                const resolvedParamArns = pulumi.all(paramArns);
+                return pulumi.all([resolvedParamArns, kmsArn]).apply(([arns, k]) => ({
                     ...doc,
                     Statement: [
                         ...doc.Statement,
@@ -147,7 +148,7 @@ export class LambdaFunction extends pulumi.ComponentResource {
                 handler: args.handler,
                 runtime: args.runtime,
                 role: this.role.arn,
-                publish: publishFunction || undefined,
+                publish: publishFunction,
 
                 // Performance and cost optimization
                 timeout: args.timeout || 30, // 30 seconds default
@@ -163,7 +164,7 @@ export class LambdaFunction extends pulumi.ComponentResource {
                 },
 
                 // Advanced configuration
-                reservedConcurrentExecutions: args.environment === "prod" ? undefined : 5, // Limit for dev
+                reservedConcurrentExecutions: args.reservedConcurrentExecutions,
 
                 // Monitoring
                 tracingConfig: {
@@ -203,12 +204,27 @@ export class LambdaFunction extends pulumi.ComponentResource {
         );
 
         if (args.aliasName) {
+            if (!publishFunction) {
+                throw new Error(
+                    "aliasName is set but the function is not published. Set args.publish=true or omit aliasName.",
+                );
+            }
+
+            const functionVersion = this.function.version.apply((version) => {
+                if (!version) {
+                    throw new pulumi.RunError(
+                        `Failed to resolve published version for Lambda ${functionName}. Ensure publish=true when using aliasName.`,
+                    );
+                }
+                return version;
+            });
+
             this.alias = new aws.lambda.Alias(
                 `${args.name}-lambda-alias`,
                 {
                     name: args.aliasName,
                     functionName: this.function.name,
-                    functionVersion: this.function.version,
+                    functionVersion: functionVersion,
                     description: `Alias for ${functionName}`,
                 },
                 { parent: this },

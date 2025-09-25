@@ -1,11 +1,25 @@
 import * as pulumi from "@pulumi/pulumi";
 
 // Pulumi Mocks to run unit tests without real AWS
-class AwsMocks implements pulumi.runtime.Mocks {
+export class AwsMocks implements pulumi.runtime.Mocks {
+    private readonly vpcCidrs = new Map<string, string>();
+
     newResource(args: pulumi.runtime.MockResourceArgs): pulumi.runtime.MockResourceResult {
         const { type, name, inputs } = args;
         const id = `${name}-id`;
         const state: any = { ...inputs };
+
+        if (type === "aws:ec2/vpc:Vpc") {
+            const cidr = (inputs["cidrBlock"] as string) || "10.0.0.0/24";
+            this.vpcCidrs.set(id, cidr);
+            state.cidrBlock = cidr;
+        }
+
+        // Debug logging to understand resource flow during tests
+        if (process.env.PULUMI_TEST_DEBUG === "1") {
+            // eslint-disable-next-line no-console
+            console.log(`mock:newResource type=${type} name=${name}`);
+        }
 
         // Add some commonly expected computed outputs by resource type
         if (type === "aws:apprunner/service:Service") {
@@ -38,6 +52,16 @@ class AwsMocks implements pulumi.runtime.Mocks {
             state.name = inputs["name"] || name;
         }
 
+        if (type === "aws:ecr/repository:Repository") {
+            state.repositoryUrl = `123456789012.dkr.ecr.us-west-2.amazonaws.com/${name}`;
+            state.repositoryName = name;
+            state.arn = `arn:aws:ecr:region:123456789012:repository/${name}`;
+        }
+
+        if (type === "aws:iam/openIdConnectProvider:OpenIdConnectProvider") {
+            state.arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com";
+        }
+
         if (type === "aws:wafv2/webAcl:WebAcl") {
             state.arn = `arn:aws:wafv2:region:123456789012:regional/webacl/${name}`;
         }
@@ -63,15 +87,23 @@ class AwsMocks implements pulumi.runtime.Mocks {
                 };
             case "aws:ec2/getAmi:getAmi":
                 return { id: "ami-1234567890abcdef0" };
+            case "aws:ec2/getVpc:getVpc": {
+                const vpcId = args.inputs?.["id"] as string | undefined;
+                const cidrBlock = (vpcId && this.vpcCidrs.get(vpcId)) || "10.0.0.0/24";
+                return { cidrBlock };
+            }
             default:
                 return {};
         }
     }
 }
 
-export async function withPulumiMocks(testBody: () => Promise<void>): Promise<void> {
-    pulumi.runtime.setMocks(new AwsMocks(), "project", "stack", false);
+export async function withPulumiMocks<T>(testBody: (mocks: AwsMocks) => Promise<T>): Promise<T> {
+    const mocks = new AwsMocks();
+    pulumi.runtime.setMocks(mocks, "project", "stack", false);
+    let result: T;
     await pulumi.runtime.runInPulumiStack(async () => {
-        await testBody();
+        result = await testBody(mocks);
     });
+    return result!;
 }
