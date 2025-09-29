@@ -1,8 +1,5 @@
 import { expect } from "chai";
-import * as pulumi from "@pulumi/pulumi";
 import { derivePlaceholderSeedConfig } from "../shared/ecr";
-import { ECRRepository } from "../modules/ecr";
-import { withPulumiMocks } from "./mocks";
 
 describe("derivePlaceholderSeedConfig", () => {
     it("defaults to latest when no image URI provided", () => {
@@ -27,44 +24,5 @@ describe("derivePlaceholderSeedConfig", () => {
         );
         expect(config.enabled).to.equal(true);
         expect(config.tag).to.equal("my-tag");
-    });
-});
-
-describe("ECRRepository placeholder seeding", () => {
-    it("creates placeholder command when seeding enabled", async function () {
-        this.timeout(5000);
-
-        await withPulumiMocks(async () => {
-            const repo = new ECRRepository("test-ecr", {
-                name: "test-app",
-                environment: "dev",
-                seedWithPlaceholderImage: true,
-                placeholderImageTag: "bootstrap",
-            });
-
-            const seed = repo.getPlaceholderSeedResource();
-            expect(seed).to.not.be.undefined;
-
-            const serialized = await pulumi.runtime.serializeProperties("placeholder-test", {
-                create: seed!.create,
-            });
-            const script = serialized.create as string;
-
-            expect(script).to.contain(":bootstrap");
-            expect(script).to.contain("docker push");
-        });
-    });
-
-    it("skips placeholder command when seeding disabled", async () => {
-        await withPulumiMocks(async () => {
-            const repo = new ECRRepository("test-ecr-disabled", {
-                name: "test-app",
-                environment: "dev",
-                seedWithPlaceholderImage: false,
-            });
-
-            const seed = repo.getPlaceholderSeedResource();
-            expect(seed).to.be.undefined;
-        });
     });
 });

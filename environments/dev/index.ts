@@ -3,7 +3,6 @@ import * as aws from "@pulumi/aws";
 import { Networking } from "../../modules/networking";
 import { Database } from "../../modules/database";
 import { AppRunnerService } from "../../modules/compute";
-import { LambdaGroup } from "../../modules/lambda";
 import { Monitoring } from "../../modules/monitoring";
 import { AppWaf } from "../../modules/waf";
 import { ECRRepository } from "../../modules/ecr";
@@ -15,7 +14,6 @@ import {
     APPLICATION_CONSTANTS,
     DATABASE_CONSTANTS,
     APP_RUNNER_CONSTANTS,
-    LAMBDA_CONSTANTS,
     ECR_CONSTANTS,
     NETWORKING_CONSTANTS,
     WAF_CONSTANTS,
@@ -41,9 +39,10 @@ const alertEmail = config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.ALERT_EMAIL);
 const enableCloudFront =
     config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_CLOUDFRONT) || false;
 const enableWaf = config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_WAF) || false;
-const enableCostBudget = config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_BUDGET);
+const enableCostBudget =
+    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_BUDGET) ?? false;
 const enableCostAnomaly =
-    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_ANOMALY) || false;
+    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_ANOMALY) ?? false;
 
 const configuredEcrImageUri = config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.ECR_IMAGE_URI);
 const placeholderSeedConfig = derivePlaceholderSeedConfig(configuredEcrImageUri);
@@ -78,8 +77,6 @@ const ecrRepository = new ECRRepository(
     },
 );
 
-const placeholderSeedResource = ecrRepository.getPlaceholderSeedResource();
-
 // Create GitHub Actions role for CI/CD
 
 const githubActionsRole = new GitHubActionsRole(
@@ -104,7 +101,7 @@ const networking = new Networking(`${appName}-dev`, {
     useFckNat: config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.USE_FCK_NAT) ?? true, // Default to fck-nat for cost savings
 });
 
-// Security groups for App Runner and Lambda to reach private resources (e.g., RDS)
+// Security groups for App Runner to reach private resources (e.g., RDS)
 const apprunnerSg = new aws.ec2.SecurityGroup(`${appName}-dev-apprunner-sg`, {
     description: "App Runner egress SG",
     vpcId: networking.vpc.id,
@@ -118,28 +115,13 @@ const apprunnerSg = new aws.ec2.SecurityGroup(`${appName}-dev-apprunner-sg`, {
     ],
     tags: envConfig.tags,
 });
-
-const lambdaSg = new aws.ec2.SecurityGroup(`${appName}-dev-lambda-sg`, {
-    description: "Lambda egress SG",
-    vpcId: networking.vpc.id,
-    egress: [
-        {
-            fromPort: NETWORKING_CONSTANTS.PORTS.ALL,
-            toPort: NETWORKING_CONSTANTS.PORTS.ALL,
-            protocol: NETWORKING_CONSTANTS.PROTOCOLS.ALL,
-            cidrBlocks: ["0.0.0.0/0"],
-        },
-    ],
-    tags: envConfig.tags,
-});
-
 // Create database
 const database = new Database(`${appName}-dev-db`, {
     name: appName,
     environment: "dev",
     subnetIds: networking.getPrivateSubnetIds(),
     securityGroupId: networking.vpc.defaultSecurityGroupId,
-    allowedSecurityGroupIds: [apprunnerSg.id, lambdaSg.id],
+    allowedSecurityGroupIds: [apprunnerSg.id],
     dbName: dbName,
     username: dbUsername,
     password: dbPassword,
@@ -197,9 +179,6 @@ const appService = new AppRunnerService(
         vpcSubnetIds: networking.getPrivateSubnetIds(),
         vpcSecurityGroupIds: [apprunnerSg.id],
     },
-    {
-        dependsOn: placeholderSeedResource ? [placeholderSeedResource] : undefined,
-    },
 );
 
 // Create monitoring and alerting
@@ -210,9 +189,8 @@ const monitoring = new Monitoring(
         environment: "dev",
         serviceName: appService.service.serviceName,
         dbInstanceId: database.instance.identifier,
-        lambdaFunctionNames: [],
         alertEmail: alertEmail,
-        enableCostBudget: enableCostBudget ?? true,
+        enableCostBudget: enableCostBudget,
         enableCostAnomaly: enableCostAnomaly,
     },
 );

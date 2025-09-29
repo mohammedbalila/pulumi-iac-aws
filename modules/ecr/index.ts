@@ -1,9 +1,5 @@
 import * as aws from "@pulumi/aws";
-import * as command from "@pulumi/command";
 import * as pulumi from "@pulumi/pulumi";
-import * as crypto from "crypto";
-import * as fs from "fs";
-import * as path from "path";
 import { commonTags } from "../../shared/config";
 
 export interface ECRArgs {
@@ -17,41 +13,10 @@ export interface ECRArgs {
     placeholderImageTag?: string;
 }
 
-const placeholderContextPath = path.resolve(__dirname, "../../shared/placeholder-app");
-
-const hashDirectory = (dir: string): string => {
-    const hash = crypto.createHash("sha256");
-
-    const walk = (current: string) => {
-        const entries = fs.readdirSync(current, { withFileTypes: true });
-        entries
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .forEach((entry) => {
-                const entryPath = path.join(current, entry.name);
-                if (entry.isDirectory()) {
-                    walk(entryPath);
-                } else if (entry.isFile()) {
-                    hash.update(entry.name);
-                    hash.update(fs.readFileSync(entryPath));
-                }
-            });
-    };
-
-    walk(dir);
-
-    return hash.digest("hex");
-};
-
-const placeholderContextExists = fs.existsSync(placeholderContextPath);
-const placeholderContextHash = placeholderContextExists
-    ? hashDirectory(placeholderContextPath)
-    : undefined;
-
 export class ECRRepository extends pulumi.ComponentResource {
     public repository: aws.ecr.Repository;
     public lifecyclePolicy?: aws.ecr.LifecyclePolicy;
     public repositoryPolicy?: aws.ecr.RepositoryPolicy;
-    private placeholderSeed?: command.local.Command;
 
     constructor(name: string, args: ECRArgs, opts?: pulumi.ComponentResourceOptions) {
         super("custom:containers:ECRRepository", name, {}, opts);
@@ -106,65 +71,12 @@ export class ECRRepository extends pulumi.ComponentResource {
             );
         }
 
-        if (args.seedWithPlaceholderImage ?? true) {
-            this.seedRepositoryWithPlaceholder(args.name, args.placeholderImageTag);
-        }
-
         // Register outputs
         this.registerOutputs({
             repositoryUrl: this.repository.repositoryUrl,
             repositoryArn: this.repository.arn,
             repositoryName: this.repository.name,
         });
-    }
-
-    public getPlaceholderSeedResource(): command.local.Command | undefined {
-        return this.placeholderSeed;
-    }
-
-    private seedRepositoryWithPlaceholder(baseName: string, placeholderTag?: string): void {
-        if (!placeholderContextExists) {
-            pulumi.log.warn("Placeholder image context not found. Skipping ECR seeding.", this);
-            return;
-        }
-
-        const imageTag =
-            placeholderTag && placeholderTag.trim().length > 0 ? placeholderTag : "latest";
-        const region = pulumi.output(aws.getRegion());
-
-        const createScript = pulumi
-            .all([region, this.repository.repositoryUrl])
-            .apply(([regionResult, repoUrl]) => {
-                const registry = repoUrl.split("/")[0];
-                return [
-                    "set -euo pipefail",
-                    `aws ecr get-login-password --region ${regionResult.name} | docker login --username AWS --password-stdin ${registry}`,
-                    `docker build -t ${repoUrl}:${imageTag} .`,
-                    `docker push ${repoUrl}:${imageTag}`,
-                ].join("\n");
-            });
-
-        const deleteScript = this.repository.repositoryUrl.apply(
-            (repoUrl) => `docker rmi ${repoUrl}:${imageTag} || true`,
-        );
-
-        this.placeholderSeed = new command.local.Command(
-            `${baseName}-seed-placeholder-image`,
-            {
-                create: createScript,
-                delete: deleteScript,
-                interpreter: ["bash", "-c"],
-                dir: placeholderContextPath,
-                environment: {
-                    AWS_PAGER: "",
-                },
-                triggers: [this.repository.repositoryUrl, imageTag, placeholderContextHash ?? ""],
-            },
-            {
-                parent: this,
-                dependsOn: [this.repository],
-            },
-        );
     }
 
     private getDefaultLifecyclePolicy(environment: string, retentionDays?: number): string {

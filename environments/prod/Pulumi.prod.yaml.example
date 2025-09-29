@@ -15,7 +15,7 @@ config:
 
   # Monitoring configuration (REQUIRED for production)
   pulumi-aws-infrastructure:alertEmail: notifications@example.com
-  pulumi-aws-infrastructure:enableCostBudget: "true"
+  pulumi-aws-infrastructure:enableCostBudget: "false"
   pulumi-aws-infrastructure:enableCostAnomaly: "false"
 
   # API configuration

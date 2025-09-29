@@ -3,7 +3,6 @@ import * as aws from "@pulumi/aws";
 import { Networking } from "../../modules/networking";
 import { Database } from "../../modules/database";
 import { AppRunnerService } from "../../modules/compute";
-import { LambdaGroup } from "../../modules/lambda";
 import { Monitoring } from "../../modules/monitoring";
 import { AppWaf } from "../../modules/waf";
 import { ECRRepository } from "../../modules/ecr";
@@ -15,7 +14,6 @@ import {
     APPLICATION_CONSTANTS,
     DATABASE_CONSTANTS,
     APP_RUNNER_CONSTANTS,
-    LAMBDA_CONSTANTS,
     ECR_CONSTANTS,
     NETWORKING_CONSTANTS,
     WAF_CONSTANTS,
@@ -42,9 +40,10 @@ const alertEmail = config.require(APPLICATION_CONSTANTS.CONFIG_KEYS.ALERT_EMAIL)
 const enableCloudFront =
     config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_CLOUDFRONT) || false;
 const enableWaf = config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_WAF) ?? true; // default on for prod
-const enableCostBudget = config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_BUDGET);
+const enableCostBudget =
+    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_BUDGET) ?? false;
 const enableCostAnomaly =
-    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_ANOMALY) || false;
+    config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.ENABLE_COST_ANOMALY) ?? false;
 
 const configuredEcrImageUri = config.get(APPLICATION_CONSTANTS.CONFIG_KEYS.ECR_IMAGE_URI);
 const placeholderSeedConfig = derivePlaceholderSeedConfig(configuredEcrImageUri);
@@ -79,8 +78,6 @@ const ecrRepository = new ECRRepository(
     },
 );
 
-const placeholderSeedResource = ecrRepository.getPlaceholderSeedResource();
-
 // Create GitHub Actions role for CI/CD
 const githubActionsRole = new GitHubActionsRole(
     `${appName}-prod-${APPLICATION_CONSTANTS.RESOURCE_TYPES.GITHUB_ACTIONS_ROLE}`,
@@ -104,23 +101,9 @@ const networking = new Networking(`${appName}-prod`, {
     useFckNat: config.getBoolean(APPLICATION_CONSTANTS.CONFIG_KEYS.USE_FCK_NAT) ?? false, // Default to NAT Gateway for production
 });
 
-// Security groups for App Runner and Lambda to reach private resources (e.g., RDS)
+// Security groups for App Runner to reach private resources (e.g., RDS)
 const apprunnerSg = new aws.ec2.SecurityGroup(`${appName}-prod-apprunner-sg`, {
     description: "App Runner egress SG",
-    vpcId: networking.vpc.id,
-    egress: [
-        {
-            fromPort: NETWORKING_CONSTANTS.PORTS.ALL,
-            toPort: NETWORKING_CONSTANTS.PORTS.ALL,
-            protocol: NETWORKING_CONSTANTS.PROTOCOLS.ALL,
-            cidrBlocks: ["0.0.0.0/0"],
-        },
-    ],
-    tags: envConfig.tags,
-});
-
-const lambdaSg = new aws.ec2.SecurityGroup(`${appName}-prod-lambda-sg`, {
-    description: "Lambda egress SG",
     vpcId: networking.vpc.id,
     egress: [
         {
@@ -139,7 +122,7 @@ const database = new Database(`${appName}-prod-db`, {
     environment: "prod",
     subnetIds: networking.getPrivateSubnetIds(),
     securityGroupId: networking.vpc.defaultSecurityGroupId,
-    allowedSecurityGroupIds: [apprunnerSg.id, lambdaSg.id],
+    allowedSecurityGroupIds: [apprunnerSg.id],
     dbName: dbName,
     username: dbUsername,
     password: dbPassword,
@@ -207,95 +190,7 @@ const appService = new AppRunnerService(
         vpcSubnetIds: networking.getPrivateSubnetIds(),
         vpcSecurityGroupIds: [apprunnerSg.id],
     },
-    {
-        dependsOn: placeholderSeedResource ? [placeholderSeedResource] : undefined,
-    },
 );
-
-// Create Lambda functions
-const lambdaGroup = new LambdaGroup(`${appName}-prod-lambdas`);
-
-// Example Lambda function - replace with your actual functions
-const exampleLambda = lambdaGroup.addFunction(`${appName}-prod-example`, {
-    name: `${appName}-example`,
-    environment: "prod",
-    runtime: APPLICATION_CONSTANTS.RUNTIMES.NODEJS_22,
-    handler: LAMBDA_CONSTANTS.HANDLERS.DEFAULT,
-    code: new pulumi.asset.AssetArchive({
-        "index.js": new pulumi.asset.StringAsset(`
-            exports.handler = async (event) => {
-                const startTime = Date.now();
-
-                try {
-                    console.log('Processing event in production');
-
-                    // Your production lambda logic here
-                    const result = {
-                        statusCode: 200,
-                        body: JSON.stringify({
-                            message: 'Production Lambda executed successfully',
-                            environment: 'production',
-                            timestamp: new Date().toISOString(),
-                            executionTime: Date.now() - startTime
-                        })
-                    };
-
-                    return result;
-                } catch (error) {
-                    console.error('Lambda execution failed:', error);
-                    return {
-                        statusCode: 500,
-                        body: JSON.stringify({
-                            error: 'Internal server error',
-                            timestamp: new Date().toISOString()
-                        })
-                    };
-                }
-            };
-        `),
-    }),
-    environmentVariables: {
-        [APPLICATION_CONSTANTS.ENV_VARS.DATABASE_URL]: databaseConnectionString,
-        [APPLICATION_CONSTANTS.ENV_VARS.ENVIRONMENT]: "prod",
-        [APPLICATION_CONSTANTS.ENV_VARS.LOG_LEVEL]: APPLICATION_CONSTANTS.LOG_LEVELS.WARN,
-    },
-    timeout: LAMBDA_CONSTANTS.TIMEOUTS.DEFAULT,
-    memorySize: LAMBDA_CONSTANTS.MEMORY_SIZES.MEDIUM,
-    // VPC networking for private access to RDS
-    subnetIds: networking.getPrivateSubnetIds(),
-    securityGroupIds: [lambdaSg.id],
-});
-
-// Data processing Lambda (example)
-const dataProcessorLambda = lambdaGroup.addFunction(`${appName}-prod-data-processor`, {
-    name: `${appName}-data-processor`,
-    environment: "prod",
-    runtime: APPLICATION_CONSTANTS.RUNTIMES.NODEJS_22,
-    handler: LAMBDA_CONSTANTS.HANDLERS.PROCESSOR,
-    code: new pulumi.asset.AssetArchive({
-        "processor.js": new pulumi.asset.StringAsset(`
-            exports.handler = async (event) => {
-                console.log('Processing data batch:', event.Records?.length || 'No records');
-
-                // Your data processing logic here
-                return {
-                    statusCode: 200,
-                    processedRecords: event.Records?.length || 0,
-                    timestamp: new Date().toISOString()
-                };
-            };
-        `),
-    }),
-    environmentVariables: {
-        [APPLICATION_CONSTANTS.ENV_VARS.DATABASE_URL]: databaseConnectionString,
-        [APPLICATION_CONSTANTS.ENV_VARS.ENVIRONMENT]: "prod",
-    },
-    timeout: LAMBDA_CONSTANTS.TIMEOUTS.LONG_RUNNING,
-    memorySize: LAMBDA_CONSTANTS.MEMORY_SIZES.LARGE,
-    // VPC networking for private access to RDS
-    subnetIds: networking.getPrivateSubnetIds(),
-    securityGroupIds: [lambdaSg.id],
-});
 
 // Create comprehensive monitoring and alerting for production
 const monitoring = new Monitoring(
@@ -305,12 +200,8 @@ const monitoring = new Monitoring(
         environment: "prod",
         serviceName: appService.service.serviceName,
         dbInstanceId: database.instance.identifier,
-        lambdaFunctionNames: [
-            exampleLambda.getFunctionName(),
-            dataProcessorLambda.getFunctionName(),
-        ],
         alertEmail: alertEmail,
-        enableCostBudget: enableCostBudget ?? true,
+        enableCostBudget: enableCostBudget,
         enableCostAnomaly: enableCostAnomaly,
     },
 );
@@ -450,10 +341,6 @@ export const outputs = {
     ecrRepositoryArn: ecrRepository.getRepositoryArn(),
     githubActionsRoleArn: githubActionsRole.getRoleArn(),
 
-    // Lambda Functions
-    exampleLambdaArn: exampleLambda.getFunctionArn(),
-    dataProcessorLambdaArn: dataProcessorLambda.getFunctionArn(),
-
     // Monitoring & Backup
     dashboardUrl: monitoring.getDashboardUrl(),
     budgetName: monitoring.getBudgetName(),
@@ -476,5 +363,3 @@ export const dashboardUrl = outputs.dashboardUrl;
 export const backupVaultArn = outputs.backupVaultArn;
 export const ecrRepositoryUrl = outputs.ecrRepositoryUrl;
 export const githubActionsRoleArn = outputs.githubActionsRoleArn;
-export const exampleLambdaArn = outputs.exampleLambdaArn;
-export const dataProcessorLambdaArn = outputs.dataProcessorLambdaArn;

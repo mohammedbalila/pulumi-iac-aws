@@ -3,6 +3,22 @@ import * as pulumi from "@pulumi/pulumi";
 import { DatabaseArgs } from "../../shared/types";
 import { commonTags } from "../../shared/config";
 
+const buildFinalSnapshotIdentifier = (name: string, environment: string): string => {
+    const base = `${name}-${environment}-${pulumi.getStack()}-final`;
+    const sanitized = base
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-+/, "")
+        .replace(/-+$/, "");
+
+    if (sanitized.length === 0) {
+        return `${environment}-final`;
+    }
+
+    return sanitized.length > 255 ? sanitized.slice(0, 255) : sanitized;
+};
+
 export class Database extends pulumi.ComponentResource {
     public instance: aws.rds.Instance;
     public subnetGroup: aws.rds.SubnetGroup;
@@ -129,7 +145,7 @@ export class Database extends pulumi.ComponentResource {
                 deletionProtection: isProduction,
                 skipFinalSnapshot: !isProduction,
                 finalSnapshotIdentifier: isProduction
-                    ? `${args.name}-final-snapshot-${new Date().getTime()}`
+                    ? buildFinalSnapshotIdentifier(args.name, args.environment)
                     : undefined,
 
                 // Parameter group for performance tuning
@@ -222,7 +238,7 @@ export class Database extends pulumi.ComponentResource {
             {
                 name: `${name}-postgres-params-${environment}`,
                 family: "postgres17",
-                description: `PostgreSQL 15 parameter group for ${name}-${environment}`,
+                description: `PostgreSQL 17 parameter group for ${name}-${environment}`,
 
                 // Performance optimization parameters
                 parameters,

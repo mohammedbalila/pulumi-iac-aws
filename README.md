@@ -347,7 +347,7 @@ aws ecr describe-images --repository-name <repository-name>
 ### Application Recovery
 
 1. **App Runner**: Automatically handles instance failures
-3. **Infrastructure**: Recreate from Pulumi code
+2. **Infrastructure**: Recreate from Pulumi code
 
 ### Vertical Scaling
 
