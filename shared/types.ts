@@ -71,46 +71,11 @@ export interface ECRConfig {
     allowedAccounts?: string[];
 }
 
-export interface LambdaArgs {
-    name: string;
-    environment: string;
-    runtime: string;
-    handler: string;
-    code: pulumi.asset.Archive;
-    environmentVariables?: Record<string, pulumi.Input<string>>;
-    timeout?: number;
-    memorySize?: number;
-    // Optional VPC configuration when accessing private resources
-    subnetIds?: pulumi.Input<string>[];
-    securityGroupIds?: pulumi.Input<string>[];
-    // Optional: SSM parameter prefixes to allow read access for runtime secrets
-    ssmParameterPaths?: pulumi.Input<string>[];
-    // Optional alias configuration for traffic shifting / deployments
-    aliasName?: string;
-    publish?: boolean;
-    reservedConcurrentExecutions?: number;
-}
-
-export interface LambdaCicdPipelineArgs {
-    name: string;
-    environment: string;
-    repositoryOwner: string;
-    repositoryName: string;
-    branch?: string;
-    connectionArn: pulumi.Input<string>;
-    lambdaFunctionName: pulumi.Input<string>;
-    lambdaAliasName?: pulumi.Input<string>;
-    artifactBucketName?: string;
-    buildImage?: string;
-    buildSpec?: pulumi.Input<string>;
-}
-
 export interface MonitoringArgs {
     name: string;
     environment: string;
     serviceName?: pulumi.Input<string>;
     dbInstanceId?: pulumi.Input<string>;
-    lambdaFunctionNames?: pulumi.Input<string>[];
     alertEmail?: string;
     enableCostBudget?: boolean;
     enableCostAnomaly?: boolean;

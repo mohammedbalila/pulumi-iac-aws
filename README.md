@@ -1,6 +1,6 @@
 # AWS Infrastructure as Code with Pulumi
 
-A cost-optimized, reliable AWS infrastructure setup using Pulumi TypeScript for deploying applications with App Runner, PostgreSQL database, and Lambda functions.
+A cost-optimized, reliable AWS infrastructure setup using Pulumi TypeScript for deploying applications with App Runner and a PostgreSQL database.
 
 ## Architecture Overview
 
@@ -12,13 +12,14 @@ This infrastructure follows AWS Well-Architected Framework principles with focus
 
 For visuals, see docs/ARCHITECTURE.md.
 
+![High-level AWS architecture](docs/architecture.png)
+
 ### Components
 
 - **App Runner**: Main application hosting with GitHub integration and VPC connectivity
     - Public ingress enabled; WAF protection attached in production by default
     - Private egress to VPC resources via VPC Connector (e.g., RDS)
 - **RDS PostgreSQL**: Managed database with automatic backups
-- **Lambda Functions**: Serverless functions for background tasks
 - **CloudWatch**: Monitoring, alerting, and dashboards
 - **Cost Management**: Budgets, anomaly detection, and cost optimization
 
@@ -43,7 +44,6 @@ pulumi-iac-aws/
 │ ├── networking/ # VPC, subnets, routing
 │ ├── database/ # RDS PostgreSQL
 │ ├── compute/ # App Runner services
-│ ├── lambda/ # Lambda functions
 │ └── monitoring/ # CloudWatch, alarms, budgets
 ├── shared/ # Shared configuration and types
 ├── .github/workflows/ # CI/CD pipeline
@@ -179,7 +179,6 @@ pulumi up       # Deploy after review
 
 - **Database**: `db.t3.micro` (~$13/month)
 - **App Runner**: Scales to zero, pay-per-request
-- **Lambda**: 128MB memory, minimal timeout
 - **Storage**: 20GB with auto-scaling to 50GB
 - **Estimated Cost**: ~$20–$35/month
 
@@ -188,7 +187,6 @@ pulumi up       # Deploy after review
 - **Networking**: Single AZ, fck‑nat enabled, no NAT Gateway baseline
 - **Database**: `db.t4g.micro`, 20 GB gp3 (auto up to 50 GB)
 - **App Runner**: 0.25 vCPU / 0.5 GB, minSize 0, maxSize 2, maxConcurrency ~10
-- **Lambda**: 128 MB
 - **WAF/CloudFront**: Off by default (can be enabled for testing)
 - **Estimated Cost**: ~$30–$60/month (mostly idle)
 
@@ -196,7 +194,6 @@ pulumi up       # Deploy after review
 
 - **Database**: `db.t4g.small` Multi-AZ (~$58/month)
 - **App Runner**: Optimized concurrency and scaling
-- **Lambda**: Right-sized memory allocation
 - **Backups**: Automated with lifecycle policies
 - **Estimated Cost**: $80-120/month
 
@@ -214,7 +211,6 @@ Each environment includes dashboards monitoring:
 
 - App Runner: Request count, response time, active instances
 - RDS: CPU utilization, connections, storage
-- Lambda: Duration, errors, throttles
 - Costs: Estimated charges and budget status
 
 ### Alerts
@@ -222,10 +218,8 @@ Each environment includes dashboards monitoring:
 Staging and production include alerts; production uses tighter SLOs:
 
 - SLOs: App Runner p95 response time (>1s), 5xx error rate (>1%)
-- SLOs: Lambda p95 duration (>1s), error rate (>1%)
 - Database CPU (>80%)
 - Storage space (<2GB free)
-- Lambda throttles and high error counts
 
 ## Security Best Practices
 
@@ -237,7 +231,6 @@ Staging and production include alerts; production uses tighter SLOs:
 - Automated backups with point-in-time recovery
 
 - App Runner runs inside your VPC via a VPC Connector; public ingress, private egress via SGs
-- Lambdas run in private subnets with scoped SGs to reach RDS when needed
 - IAM roles scoped to minimum required actions (logs access limited to function log groups; X-Ray only for App Runner)
 - Runtime secrets via SSM Parameter Store (optional) with IAM limited to specified parameter paths
 - WAFv2 WebACL attached to App Runner (prod by default); optional CloudFront in front for edge protections and caching
@@ -303,8 +296,6 @@ const dbInstance = new rds.Instance(`${appName}-${environment}-db`, {
 });
 ```
 
-> The same applies to Lambda functions and other resources.
-
 ## Maintenance Tasks
 
 ### Regular Tasks
@@ -321,7 +312,6 @@ const dbInstance = new rds.Instance(`${appName}-${environment}-db`, {
 
 ### Security Updates
 
-- Regularly update base images for Lambda functions
 - Review IAM permissions and remove unused roles
 - Monitor security alerts in AWS Security Hub
 
@@ -338,16 +328,6 @@ aws apprunner describe-service --service-arn <service-arn>
 
 # Confirm a container image is available in ECR
 aws ecr describe-images --repository-name <repository-name>
-```
-
-#### Lambda Function Errors
-
-```bash
-# View Lambda logs
-aws logs describe-log-groups --log-group-name-prefix /aws/lambda/
-
-# Check function configuration
-pulumi stack output exampleLambdaArn
 ```
 
 ### Getting Help
@@ -367,20 +347,17 @@ pulumi stack output exampleLambdaArn
 ### Application Recovery
 
 1. **App Runner**: Automatically handles instance failures
-2. **Lambda**: Built-in fault tolerance and retries & DLQs
 3. **Infrastructure**: Recreate from Pulumi code
 
 ### Vertical Scaling
 
 - Database: Upgrade to larger instance class
 - App Runner: Increase CPU/memory allocation
-- Lambda: Increase memory allocation
 
 ### Horizontal Scaling
 
 - App Runner: Adjust min/max size and concurrency settings
 - Database: Scale storage automatically; consider read replicas for read-heavy workloads
-- Lambda: Increase reserved concurrency if needed
 
 ### Cost vs Performance Trade-offs
 

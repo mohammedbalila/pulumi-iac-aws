@@ -9,7 +9,7 @@ Provision a cost‑aware PostgreSQL instance with secure private networking, env
 - Storage: GP3 with encryption; `allocatedStorage` minimal with `maxAllocatedStorage` autoscale.
 - Availability: Multi‑AZ only in prod; single‑AZ in dev/stage for cost.
 - Backups: longer retention in prod; maintenance windows defined.
-- Networking: private subnets only; SG ingress limited to allowed SGs (App Runner, Lambda).
+- Networking: private subnets only; SG ingress limited to allowed service security groups (e.g., App Runner).
 - Parameter group: enable `pg_stat_statements`, bounded `max_connections`, and verbose logs only in non‑prod.
 
 ## Best Practices & Standards
@@ -45,7 +45,7 @@ const db = new Database("db", {
     name: "db",
     environment: pulumi.getStack(),
     subnetIds: net.getPrivateSubnetIds(),
-    allowedSecurityGroupIds: [appRunnerSgId, lambdaSgId],
+    allowedSecurityGroupIds: [appRunnerSgId],
     dbName: "appdb",
     username: "app",
     password: pulumi.secret(cfg.require("dbPassword")),

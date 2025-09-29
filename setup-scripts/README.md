@@ -151,7 +151,7 @@ Treat it as the latest source of truth when configuring GitHub Actions.
 The bundled policy balances least privilege with the actions required by Pulumi-managed resources:
 
 - EC2, VPC, and networking (for FCK-NAT and security groups)
-- RDS, App Runner, Lambda, CloudWatch, Events, SNS/SQS
+- RDS, App Runner, CloudWatch, Events, SNS/SQS
 - ECR image push/pull operations
 - IAM CRUD for roles/policies associated with GitHub OIDC
 - Budgets/Cost Explorer, WAF, CloudFront, SSM, KMS, AWS Backup

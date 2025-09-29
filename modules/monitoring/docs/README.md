@@ -6,8 +6,8 @@ Provide SLO‑oriented monitoring and cost visibility via CloudWatch dashboards/
 
 ## Key Design Choices
 
-- SLO alarms: p95 latency and error‑rate % for App Runner and Lambda complement traditional alarms.
-- Dashboard includes service, DB, Lambda, and cost widgets for a single pane of glass.
+- SLO alarms: p95 latency and error‑rate % for App Runner complement traditional alarms.
+- Dashboard includes service, DB, and cost widgets for a single pane of glass.
 - Budgets notify at 80% actual and 100% forecast; anomaly monitor for daily spikes by service.
 - Email subscription optional per environment.
 
@@ -19,7 +19,7 @@ Provide SLO‑oriented monitoring and cost visibility via CloudWatch dashboards/
 
 ## Configuration Knobs
 
-- `serviceName`, `dbInstanceId`, `lambdaFunctionNames`, `alertEmail`.
+- `serviceName`, `dbInstanceId`, `alertEmail`.
 - Thresholds vary by environment (stricter in prod).
 
 ## Inputs
@@ -27,7 +27,6 @@ Provide SLO‑oriented monitoring and cost visibility via CloudWatch dashboards/
 - `name`, `environment`
 - `serviceName?` string (App Runner)
 - `dbInstanceId?` string (RDS)
-- `lambdaFunctionNames?` string[]
 - `alertEmail?` string
 
 ## Outputs
@@ -44,7 +43,6 @@ const mon = new Monitoring("obs", {
     environment: pulumi.getStack(),
     serviceName: app.service.serviceName,
     dbInstanceId: db.instance.id,
-    lambdaFunctionNames: [fn.getFunctionName()],
     alertEmail: "alerts@example.com",
 });
 

@@ -41,9 +41,8 @@ export class Monitoring extends pulumi.ComponentResource {
         this.dashboard = this.createDashboard(args);
         this.createAppRunnerAlarms(args);
         this.createDatabaseAlarms(args);
-        this.createLambdaAlarms(args);
         this.createSloAlarms(args);
-        const enableCostBudget = args.enableCostBudget ?? true;
+        const enableCostBudget = args.enableCostBudget ?? false;
         const enableCostAnomaly = args.enableCostAnomaly ?? false;
         if (enableCostBudget || enableCostAnomaly) {
             this.createCostMonitoring({
@@ -62,12 +61,11 @@ export class Monitoring extends pulumi.ComponentResource {
     private createDashboard(args: MonitoringArgs): aws.cloudwatch.Dashboard {
         const serviceName = this.getServiceName(args);
         const dbInstanceId = this.getDbInstanceId(args);
-        const lambdaNames = this.getLambdaNames(args);
         const regionName = pulumi.output(aws.getRegion()).apply((r) => r.name);
 
         const dashboardBody = pulumi
-            .all([serviceName, dbInstanceId, lambdaNames, regionName])
-            .apply(([svc, db, lambdaList, region]) => {
+            .all([serviceName, dbInstanceId, regionName])
+            .apply(([svc, db, region]) => {
                 const widgets: any[] = [];
 
                 if (svc) {
@@ -115,32 +113,6 @@ export class Monitoring extends pulumi.ComponentResource {
                             stacked: false,
                             region: region,
                             title: "RDS PostgreSQL Metrics",
-                            period: 300,
-                            stat: "Average",
-                        },
-                    });
-                }
-
-                if (lambdaList.length > 0) {
-                    const lambdaMetrics = lambdaList.flatMap((functionName) => [
-                        ["AWS/Lambda", "Duration", "FunctionName", functionName],
-                        [".", "Invocations", ".", "."],
-                        [".", "Errors", ".", "."],
-                        [".", "Throttles", ".", "."],
-                    ]);
-
-                    widgets.push({
-                        type: "metric",
-                        x: 12,
-                        y: 0,
-                        width: 12,
-                        height: 6,
-                        properties: {
-                            metrics: lambdaMetrics,
-                            view: "timeSeries",
-                            stacked: false,
-                            region: region,
-                            title: "Lambda Function Metrics",
                             period: 300,
                             stat: "Average",
                         },
@@ -294,24 +266,31 @@ export class Monitoring extends pulumi.ComponentResource {
         });
     }
 
-    private createLambdaAlarms(args: MonitoringArgs): void {
-        if (!args.lambdaFunctionNames || args.lambdaFunctionNames.length === 0) return;
-
+    private createSloAlarms(args: MonitoringArgs): void {
         const tags = commonTags(args.environment);
-        this.forEachLambdaName(args, (functionName) => {
+
+        if (!args.serviceName) {
+            return;
+        }
+
+        this.getServiceName(args).apply((serviceName) => {
+            if (!serviceName) {
+                return;
+            }
+
             new aws.cloudwatch.MetricAlarm(
-                `${args.name}-lambda-${functionName}-errors`,
+                `${args.name}-apprunner-p95-rt`,
                 {
-                    name: `${args.name}-lambda-${functionName}-errors-${args.environment}`,
-                    alarmDescription: `Lambda function ${functionName} error rate is high`,
-                    metricName: "Errors",
-                    namespace: "AWS/Lambda",
-                    statistic: "Sum",
+                    name: `${args.name}-apprunner-p95-response-${args.environment}`,
+                    alarmDescription: "App Runner p95 response time SLO",
+                    metricName: "ResponseTime",
+                    namespace: "AWS/AppRunner",
+                    extendedStatistic: "p95",
                     period: 300,
                     evaluationPeriods: 2,
-                    threshold: 5,
+                    threshold: args.environment === "prod" ? 1000 : 2000,
                     comparisonOperator: "GreaterThanThreshold",
-                    dimensions: { FunctionName: functionName },
+                    dimensions: { ServiceName: serviceName },
                     alarmActions: [this.alarmTopic.arn],
                     tags: tags,
                 },
@@ -319,37 +298,44 @@ export class Monitoring extends pulumi.ComponentResource {
             );
 
             new aws.cloudwatch.MetricAlarm(
-                `${args.name}-lambda-${functionName}-duration`,
+                `${args.name}-apprunner-error-rate-pct`,
                 {
-                    name: `${args.name}-lambda-${functionName}-duration-${args.environment}`,
-                    alarmDescription: `Lambda function ${functionName} duration is high`,
-                    metricName: "Duration",
-                    namespace: "AWS/Lambda",
-                    statistic: "Average",
-                    period: 300,
-                    evaluationPeriods: 2,
-                    threshold: 25000,
+                    name: `${args.name}-apprunner-error-rate-pct-${args.environment}`,
+                    alarmDescription: "App Runner 5xx error rate exceeds SLO",
                     comparisonOperator: "GreaterThanThreshold",
-                    dimensions: { FunctionName: functionName },
-                    alarmActions: [this.alarmTopic.arn],
-                    tags: tags,
-                },
-                { parent: this },
-            );
-
-            new aws.cloudwatch.MetricAlarm(
-                `${args.name}-lambda-${functionName}-throttles`,
-                {
-                    name: `${args.name}-lambda-${functionName}-throttles-${args.environment}`,
-                    alarmDescription: `Lambda function ${functionName} is being throttled`,
-                    metricName: "Throttles",
-                    namespace: "AWS/Lambda",
-                    statistic: "Sum",
-                    period: 300,
-                    evaluationPeriods: 1,
-                    threshold: 1,
-                    comparisonOperator: "GreaterThanOrEqualToThreshold",
-                    dimensions: { FunctionName: functionName },
+                    threshold: args.environment === "prod" ? 1 : 5,
+                    evaluationPeriods: 2,
+                    treatMissingData: "notBreaching",
+                    metricQueries: [
+                        {
+                            id: "m5xx",
+                            metric: {
+                                metricName: "5xxStatusResponses",
+                                namespace: "AWS/AppRunner",
+                                dimensions: { ServiceName: serviceName },
+                                period: 300,
+                                stat: "Sum",
+                            },
+                            returnData: false,
+                        },
+                        {
+                            id: "mreq",
+                            metric: {
+                                metricName: "RequestCount",
+                                namespace: "AWS/AppRunner",
+                                dimensions: { ServiceName: serviceName },
+                                period: 300,
+                                stat: "Sum",
+                            },
+                            returnData: false,
+                        },
+                        {
+                            id: "e1",
+                            expression: "100 * m5xx / mreq",
+                            label: "Error rate %",
+                            returnData: true,
+                        },
+                    ],
                     alarmActions: [this.alarmTopic.arn],
                     tags: tags,
                 },
@@ -358,152 +344,8 @@ export class Monitoring extends pulumi.ComponentResource {
         });
     }
 
-    private createSloAlarms(args: MonitoringArgs): void {
-        const tags = commonTags(args.environment);
-
-        if (args.serviceName) {
-            this.getServiceName(args).apply((serviceName) => {
-                if (!serviceName) {
-                    return;
-                }
-
-                new aws.cloudwatch.MetricAlarm(
-                    `${args.name}-apprunner-p95-rt`,
-                    {
-                        name: `${args.name}-apprunner-p95-response-${args.environment}`,
-                        alarmDescription: "App Runner p95 response time SLO",
-                        metricName: "ResponseTime",
-                        namespace: "AWS/AppRunner",
-                        extendedStatistic: "p95",
-                        period: 300,
-                        evaluationPeriods: 2,
-                        threshold: args.environment === "prod" ? 1000 : 2000,
-                        comparisonOperator: "GreaterThanThreshold",
-                        dimensions: { ServiceName: serviceName },
-                        alarmActions: [this.alarmTopic.arn],
-                        tags: tags,
-                    },
-                    { parent: this },
-                );
-
-                new aws.cloudwatch.MetricAlarm(
-                    `${args.name}-apprunner-error-rate-pct`,
-                    {
-                        name: `${args.name}-apprunner-error-rate-pct-${args.environment}`,
-                        alarmDescription: "App Runner 5xx error rate exceeds SLO",
-                        comparisonOperator: "GreaterThanThreshold",
-                        threshold: args.environment === "prod" ? 1 : 5,
-                        evaluationPeriods: 2,
-                        treatMissingData: "notBreaching",
-                        metricQueries: [
-                            {
-                                id: "m5xx",
-                                metric: {
-                                    metricName: "5xxStatusResponses",
-                                    namespace: "AWS/AppRunner",
-                                    dimensions: { ServiceName: serviceName },
-                                    period: 300,
-                                    stat: "Sum",
-                                },
-                                returnData: false,
-                            },
-                            {
-                                id: "mreq",
-                                metric: {
-                                    metricName: "RequestCount",
-                                    namespace: "AWS/AppRunner",
-                                    dimensions: { ServiceName: serviceName },
-                                    period: 300,
-                                    stat: "Sum",
-                                },
-                                returnData: false,
-                            },
-                            {
-                                id: "e1",
-                                expression: "100 * m5xx / mreq",
-                                label: "Error rate %",
-                                returnData: true,
-                            },
-                        ],
-                        alarmActions: [this.alarmTopic.arn],
-                        tags: tags,
-                    },
-                    { parent: this },
-                );
-            });
-        }
-
-        if (args.lambdaFunctionNames && args.lambdaFunctionNames.length > 0) {
-            this.forEachLambdaName(args, (functionName) => {
-                new aws.cloudwatch.MetricAlarm(
-                    `${args.name}-lambda-${functionName}-p95`,
-                    {
-                        name: `${args.name}-lambda-${functionName}-p95-${args.environment}`,
-                        alarmDescription: `Lambda ${functionName} p95 duration SLO`,
-                        metricName: "Duration",
-                        namespace: "AWS/Lambda",
-                        extendedStatistic: "p95",
-                        period: 300,
-                        evaluationPeriods: 2,
-                        threshold: args.environment === "prod" ? 1000 : 2000,
-                        comparisonOperator: "GreaterThanThreshold",
-                        dimensions: { FunctionName: functionName },
-                        alarmActions: [this.alarmTopic.arn],
-                        tags: tags,
-                    },
-                    { parent: this },
-                );
-
-                new aws.cloudwatch.MetricAlarm(
-                    `${args.name}-lambda-${functionName}-error-rate-pct`,
-                    {
-                        name: `${args.name}-lambda-${functionName}-error-rate-pct-${args.environment}`,
-                        alarmDescription: `Lambda ${functionName} error rate exceeds SLO`,
-                        comparisonOperator: "GreaterThanThreshold",
-                        threshold: args.environment === "prod" ? 1 : 5,
-                        evaluationPeriods: 2,
-                        treatMissingData: "notBreaching",
-                        metricQueries: [
-                            {
-                                id: "merr",
-                                metric: {
-                                    metricName: "Errors",
-                                    namespace: "AWS/Lambda",
-                                    dimensions: { FunctionName: functionName },
-                                    period: 300,
-                                    stat: "Sum",
-                                },
-                                returnData: false,
-                            },
-                            {
-                                id: "minv",
-                                metric: {
-                                    metricName: "Invocations",
-                                    namespace: "AWS/Lambda",
-                                    dimensions: { FunctionName: functionName },
-                                    period: 300,
-                                    stat: "Sum",
-                                },
-                                returnData: false,
-                            },
-                            {
-                                id: "e1",
-                                expression: "100 * merr / minv",
-                                label: "Error rate %",
-                                returnData: true,
-                            },
-                        ],
-                        alarmActions: [this.alarmTopic.arn],
-                        tags: tags,
-                    },
-                    { parent: this },
-                );
-            });
-        }
-    }
-
     private createCostMonitoring(args: MonitoringArgs): void {
-        const enableBudget = args.enableCostBudget ?? true;
+        const enableBudget = args.enableCostBudget ?? false;
         const enableAnomaly = args.enableCostAnomaly ?? false;
 
         if (!enableBudget && !enableAnomaly) {
@@ -589,22 +431,6 @@ export class Monitoring extends pulumi.ComponentResource {
 
     private getDbInstanceId(args: MonitoringArgs): pulumi.Output<string | undefined> {
         return pulumi.output(args.dbInstanceId ?? undefined);
-    }
-
-    private getLambdaNames(args: MonitoringArgs): pulumi.Output<string[]> {
-        if (!args.lambdaFunctionNames || args.lambdaFunctionNames.length === 0) {
-            return pulumi.output([]);
-        }
-
-        return pulumi
-            .all(args.lambdaFunctionNames.map((name) => pulumi.output(name)))
-            .apply((names) => names.filter((n): n is string => !!n));
-    }
-
-    private forEachLambdaName(args: MonitoringArgs, cb: (functionName: string) => void): void {
-        this.getLambdaNames(args).apply((names) => {
-            names.forEach((fn) => cb(fn));
-        });
     }
 
     public getDashboardUrl(): pulumi.Output<string> {

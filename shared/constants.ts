@@ -124,27 +124,6 @@ export const APP_RUNNER_CONSTANTS = {
     },
 } as const;
 
-// Lambda constants
-export const LAMBDA_CONSTANTS = {
-    MEMORY_SIZES: {
-        SMALL: 128,
-        MEDIUM: 512,
-        LARGE: 1024,
-        XLARGE: 2048,
-    },
-
-    TIMEOUTS: {
-        DEFAULT: 30,
-        LONG_RUNNING: 300,
-        MAX: 900,
-    },
-
-    HANDLERS: {
-        DEFAULT: "index.handler",
-        PROCESSOR: "processor.handler",
-    },
-} as const;
-
 // ECR constants
 export const ECR_CONSTANTS = {
     IMAGE_MUTABILITY: {
