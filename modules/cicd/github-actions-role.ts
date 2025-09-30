@@ -58,8 +58,6 @@ export class GitHubActionsRole extends pulumi.ComponentResource {
                 name: `GitHubActions-${args.name}-${args.environment}`,
                 assumeRolePolicy: this.createAssumeRolePolicy(args),
                 managedPolicyArns: [
-                    // Basic permissions for GitHub Actions
-                    "arn:aws:iam::aws:policy/ReadOnlyAccess",
                     ...(args.additionalPolicyArns || []),
                 ],
                 inlinePolicies: [
